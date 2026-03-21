@@ -32,8 +32,8 @@ CHECKPOINT_PATH = os.path.join(
 )
 MODEL_CFG = "configs/sam2.1/sam2.1_hiera_b+.yaml"
 
-# Small thumbnails for the gallery preview
-THUMB_MAX = 256
+# Thumbnails for the gallery preview
+THUMB_MAX = 320
 
 
 class ImageSegmenter:
@@ -49,9 +49,9 @@ class ImageSegmenter:
 
         self.mask_generator = SAM2AutomaticMaskGenerator(
             model=sam2_model,
-            points_per_side=16,
+            points_per_side=32,
             pred_iou_thresh=0.86,
-            stability_score_thresh=0.92,
+            stability_score_thresh=0.90,
             min_mask_region_area=100,
         )
         print("SAM 2.1 model loaded successfully.")
@@ -67,7 +67,36 @@ class ImageSegmenter:
                 print("MPS available but not functional, falling back to CPU.")
         return torch.device("cpu")
 
-    def segment(self, image_path, output_dir, min_area=500, max_dim=1536):
+    def _deduplicate_masks(self, masks, iou_thresh=0.9):
+        """Remove near-duplicate masks (IoU > threshold). Keeps first (larger) one."""
+        keep = []
+        for mask in masks:
+            seg = mask["segmentation"]
+            bbox = mask["bbox"]
+            is_dup = False
+            for kept in keep:
+                kbbox = kept["bbox"]
+                # Quick bounding-box overlap check before expensive pixel IoU
+                ix = max(bbox[0], kbbox[0])
+                iy = max(bbox[1], kbbox[1])
+                ir = min(bbox[0] + bbox[2], kbbox[0] + kbbox[2])
+                ib = min(bbox[1] + bbox[3], kbbox[1] + kbbox[3])
+                if ir <= ix or ib <= iy:
+                    continue
+                bbox_overlap = (ir - ix) * (ib - iy)
+                if bbox_overlap / (bbox[2] * bbox[3] + 1e-6) < 0.3:
+                    continue
+                # Pixel-level IoU
+                intersection = np.logical_and(seg, kept["segmentation"]).sum()
+                union = np.logical_or(seg, kept["segmentation"]).sum()
+                if union > 0 and intersection / union > iou_thresh:
+                    is_dup = True
+                    break
+            if not is_dup:
+                keep.append(mask)
+        return keep
+
+    def segment(self, image_path, output_dir, min_area=500, max_dim=2048):
         """
         Detect all masks and save compact data for deferred rendering.
 
@@ -129,6 +158,9 @@ class ImageSegmenter:
         for m in masks[200:]:
             del m["segmentation"]
         masks = masks[:200]
+
+        # Remove near-duplicate masks (IoU > 0.9)
+        masks = self._deduplicate_masks(masks)
 
         results = []
         for idx, mask_data in enumerate(masks):
@@ -289,7 +321,7 @@ class ImageSegmenter:
             # Sigma spans ~1-3% of the perimeter — enough to damp the
             # pixel-level rasterization noise in SAM's binary mask without
             # reshaping corners or curves of the actual object.
-            sigma = max(2.0, min(len(pts) / 300.0, 8.0))
+            sigma = max(2.0, min(len(pts) / 250.0, 12.0))
             ks = int(6 * sigma) | 1           # kernel size (always odd)
             pad = ks // 2                     # circular wrap-around padding
 
@@ -333,13 +365,19 @@ class ImageSegmenter:
         segment_img = Image.fromarray(rgba, "RGBA")
         del rgba
 
-        # ── Edge feathering at full resolution ───────────────────────────────
-        # Erode trims the soft fringe left by LANCZOS; Gaussian blur creates a
-        # natural alpha falloff rather than a hard binary edge.
-        erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        alpha_np = cv2.erode(full_mask_np, erode_k, iterations=1)
+        # ── Edge feathering via distance transform ─────────────────────────
+        # Distance transform computes exact distance from each pixel to the
+        # nearest background pixel, producing a smooth alpha gradient that
+        # follows the contour shape precisely.  The feather radius scales
+        # with segment size so small icons get a tight edge and large photos
+        # get a proportionally wider falloff.
+        binary_mask = (full_mask_np > 127).astype(np.uint8)
         del full_mask_np
-        alpha_np = cv2.GaussianBlur(alpha_np, (0, 0), sigmaX=2.5)
+        dist = cv2.distanceTransform(binary_mask, cv2.DIST_L2, 5)
+        feather_px = max(1.5, min(min(fw, fh) * 0.008, 4.0))
+        alpha_float = np.clip(dist / feather_px, 0.0, 1.0)
+        alpha_np = (alpha_float * 255).astype(np.uint8)
+        alpha_np = cv2.GaussianBlur(alpha_np, (3, 3), sigmaX=0.5)
         segment_img.putalpha(Image.fromarray(alpha_np, "L"))
 
         # Upscale for sticker-quality output

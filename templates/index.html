@@ -33,6 +33,7 @@
         <!-- Processing Section -->
         <section id="processing-section" hidden>
             <div class="processing-content">
+                <img id="preview-image" class="preview-image" src="" alt="" hidden>
                 <div class="spinner"></div>
                 <p id="status-text">Uploading image...</p>
                 <p class="hint" id="status-hint">This may take a few seconds</p>
@@ -51,6 +52,14 @@
                     <div class="selection-controls">
                         <button id="select-all-btn" class="btn-link">Select all</button>
                         <button id="clear-selection-btn" class="btn-link">Clear</button>
+                    </div>
+                    <div class="sort-control">
+                        <label for="sort-by">Sort:</label>
+                        <select id="sort-by">
+                            <option value="area-desc">Largest first</option>
+                            <option value="area-asc">Smallest first</option>
+                            <option value="quality">Best quality</option>
+                        </select>
                     </div>
                     <div class="filter-control">
                         <label for="area-filter">Min area:</label>

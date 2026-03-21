@@ -10,6 +10,7 @@ import shutil
 import time
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
@@ -121,7 +122,7 @@ def segment(session_id):
     # Parse optional parameters
     data = request.get_json(silent=True) or {}
     min_area = data.get("min_area", 500)
-    max_dim = data.get("max_dim", 1536)
+    max_dim = data.get("max_dim", 2048)
 
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
 
@@ -158,6 +159,15 @@ def segment_image(session_id, filename):
         return jsonify({"error": "Session not found"}), 404
 
     return send_from_directory(thumbs_dir, filename, mimetype="image/png")
+
+
+@app.route("/preview/<session_id>")
+def preview(session_id):
+    """Serve the original uploaded image for preview."""
+    image_path = _get_image_path(session_id)
+    if image_path is None:
+        return jsonify({"error": "Session not found"}), 404
+    return send_file(image_path)
 
 
 @app.route("/download/<session_id>/<filename>")
@@ -217,22 +227,30 @@ def download_all(session_id):
     if not indices:
         return jsonify({"error": "No segments selected"}), 400
 
-    # Render upscaled segments into a temporary sub-directory
+    # Render upscaled segments in parallel using ThreadPoolExecutor
     render_dir = os.path.join(session_output_dir, f"render_{upscale}x")
     os.makedirs(render_dir, exist_ok=True)
 
-    rendered = []
-    for idx in indices:
-        filename = f"segment_{idx:03d}.png"
-        out_path = os.path.join(render_dir, filename)
-        if not os.path.exists(out_path):
+    def _render_one(idx):
+        fname = f"segment_{idx:03d}.png"
+        opath = os.path.join(render_dir, fname)
+        if not os.path.exists(opath):
             result = segmenter.render_segment(
                 image_path, session_output_dir, idx,
-                meta=meta, upscale=upscale, out_path=out_path,
+                meta=meta, upscale=upscale, out_path=opath,
             )
             if result is None:
-                continue
-        rendered.append((out_path, filename))
+                return None
+        return (opath, fname)
+
+    rendered = []
+    workers = min(os.cpu_count() or 4, 6)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_render_one, idx): idx for idx in indices}
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                rendered.append(result)
 
     if not rendered:
         shutil.rmtree(render_dir, ignore_errors=True)

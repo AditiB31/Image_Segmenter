@@ -15,6 +15,8 @@ const selectedCount = document.getElementById("selected-count");
 const startOverBtn = document.getElementById("start-over-btn");
 const areaFilter = document.getElementById("area-filter");
 const areaValue = document.getElementById("area-value");
+const sortBy = document.getElementById("sort-by");
+const previewImage = document.getElementById("preview-image");
 
 let currentSessionId = null;
 let allSegments = [];
@@ -54,6 +56,9 @@ startOverBtn.addEventListener("click", () => {
     selectedIndices.clear();
     currentSessionId = null;
     fileInput.value = "";
+    previewImage.hidden = true;
+    previewImage.src = "";
+    sortBy.value = "area-desc";
 });
 
 // Area filter
@@ -61,6 +66,23 @@ areaFilter.addEventListener("input", () => {
     const minArea = parseInt(areaFilter.value);
     areaValue.textContent = minArea.toLocaleString() + " px";
     filterSegments(minArea);
+});
+
+// Sort handler
+sortBy.addEventListener("change", () => {
+    sortSegments(sortBy.value);
+});
+
+// Keyboard shortcuts
+document.addEventListener("keydown", (e) => {
+    if (resultsSection.hidden) return;
+    if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+        e.preventDefault();
+        selectAllBtn.click();
+    }
+    if (e.key === "Escape") {
+        clearSelectionBtn.click();
+    }
 });
 
 // Select all visible
@@ -129,6 +151,12 @@ async function handleFile(file) {
         alert("File is too large. Maximum size is 50 MB.");
         return;
     }
+
+    // Show image preview immediately via object URL
+    const previewUrl = URL.createObjectURL(file);
+    previewImage.src = previewUrl;
+    previewImage.hidden = false;
+    previewImage.onload = () => URL.revokeObjectURL(previewUrl);
 
     showSection("processing");
     statusText.textContent = "Uploading image...";
@@ -266,6 +294,22 @@ function updateVisibleCount() {
     const total = segmentsGrid.querySelectorAll(".segment-card").length;
     const visible = segmentsGrid.querySelectorAll('.segment-card:not([style*="display: none"])').length;
     visibleCount.textContent = visible < total ? `(showing ${visible} of ${total})` : "";
+}
+
+function sortSegments(criterion) {
+    const cards = [...segmentsGrid.querySelectorAll(".segment-card")];
+    cards.sort((a, b) => {
+        const aSeg = allSegments.find((s) => s.index === parseInt(a.dataset.index));
+        const bSeg = allSegments.find((s) => s.index === parseInt(b.dataset.index));
+        if (!aSeg || !bSeg) return 0;
+        switch (criterion) {
+            case "area-desc": return bSeg.area - aSeg.area;
+            case "area-asc": return aSeg.area - bSeg.area;
+            case "quality": return (bSeg.predicted_iou || 0) - (aSeg.predicted_iou || 0);
+            default: return 0;
+        }
+    });
+    cards.forEach((card) => segmentsGrid.appendChild(card));
 }
 
 function showSection(name) {
