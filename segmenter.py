@@ -286,15 +286,10 @@ class ImageSegmenter:
             main = max(contours, key=cv2.contourArea)
             pts = main[:, 0, :].astype(np.float64)   # (N, 2)
 
-            # Sigma is driven by two constraints:
-            #   - Perimeter-based: len/15 gives ~6.5% of perimeter, which is
-            #     large enough to smooth away attached background blobs whose
-            #     "neck" spans ~3σ contour points.
-            #   - Shape-based cap: 30% of the shorter mask dimension prevents
-            #     over-rounding on small/thin segments like pill buttons.
-            short_dim = float(min(shape))
-            sigma = float(min(len(pts) / 15.0, short_dim * 0.3))
-            sigma = max(sigma, 5.0)
+            # Sigma spans ~1-3% of the perimeter — enough to damp the
+            # pixel-level rasterization noise in SAM's binary mask without
+            # reshaping corners or curves of the actual object.
+            sigma = max(2.0, min(len(pts) / 300.0, 8.0))
             ks = int(6 * sigma) | 1           # kernel size (always odd)
             pad = ks // 2                     # circular wrap-around padding
 
