@@ -4,6 +4,6 @@ checkpoints/
 __pycache__/
 *.pyc
 .env
-venv/
+.venv/
 *.egg-info/
 src/

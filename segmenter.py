@@ -80,7 +80,7 @@ class ImageSegmenter:
         orig_w, orig_h = original.size
         original_np = np.array(original)
 
-        # Resize for inference if needed (M4 32GB handles 4096 comfortably)
+        # Resize for inference if needed
         scale = 1.0
         if max(orig_w, orig_h) > max_dim:
             scale = max_dim / max(orig_w, orig_h)
@@ -90,12 +90,32 @@ class ImageSegmenter:
         else:
             inference_image = original_np
 
-        masks = self.mask_generator.generate(inference_image)
+        # PIL image no longer needed — pixel data is in original_np
+        original.close()
+        del original
 
-        # Filter by area (scaled back to original resolution)
+        with torch.inference_mode():
+            all_masks = self.mask_generator.generate(inference_image)
+
+        # Free inference image early when it's a separate allocation
+        if scale != 1.0:
+            del inference_image
+
+        # Filter by area, eagerly freeing rejected masks' segmentation arrays
         inv_scale_sq = 1.0 / (scale * scale) if scale != 1.0 else 1.0
-        masks = [m for m in masks if m["area"] * inv_scale_sq >= min_area]
+        masks = []
+        for m in all_masks:
+            if m["area"] * inv_scale_sq >= min_area:
+                masks.append(m)
+            else:
+                del m["segmentation"]
+        del all_masks
+
         masks.sort(key=lambda m: m["area"], reverse=True)
+
+        # Free excess masks beyond the cap
+        for m in masks[200:]:
+            del m["segmentation"]
         masks = masks[:200]
 
         results = []
@@ -104,35 +124,65 @@ class ImageSegmenter:
             bbox = mask_data["bbox"]
 
             if scale != 1.0:
-                # Upscale mask to original resolution via PIL (no cv2 needed)
-                mask_pil = Image.fromarray(seg_mask.astype(np.uint8) * 255, "L")
-                mask_pil = mask_pil.resize((orig_w, orig_h), Image.NEAREST)
-                seg_mask = np.array(mask_pil) > 127
+                # Scale bbox to original resolution
+                x = int(bbox[0] / scale)
+                y = int(bbox[1] / scale)
+                w = int(bbox[2] / scale)
+                h = int(bbox[3] / scale)
 
-                x, y, w, h = (
-                    int(bbox[0] / scale),
-                    int(bbox[1] / scale),
-                    int(bbox[2] / scale),
-                    int(bbox[3] / scale),
+                # Clamp to image bounds
+                x = max(0, x)
+                y = max(0, y)
+                w = min(w, orig_w - x)
+                h = min(h, orig_h - y)
+                if w <= 0 or h <= 0:
+                    del mask_data["segmentation"]
+                    continue
+
+                # Upscale only the bbox region of the mask, not the full image.
+                # Map the clamped original-res bbox back to inference coords
+                # to extract just the relevant patch.
+                inf_x = max(0, int(x * scale))
+                inf_y = max(0, int(y * scale))
+                inf_r = min(int((x + w) * scale) + 1, seg_mask.shape[1])
+                inf_b = min(int((y + h) * scale) + 1, seg_mask.shape[0])
+                cropped_mask_small = seg_mask[inf_y:inf_b, inf_x:inf_r]
+
+                mask_pil = Image.fromarray(
+                    cropped_mask_small.astype(np.uint8) * 255, "L"
                 )
+                mask_pil = mask_pil.resize((w, h), Image.NEAREST)
+                cropped_mask = np.array(mask_pil) > 127
+                mask_pil.close()
+                del cropped_mask_small
             else:
                 x, y, w, h = (int(v) for v in bbox)
 
-            # Clamp to image bounds
-            x = max(0, x)
-            y = max(0, y)
-            w = min(w, orig_w - x)
-            h = min(h, orig_h - y)
-            if w <= 0 or h <= 0:
-                continue
+                # Clamp to image bounds
+                x = max(0, x)
+                y = max(0, y)
+                w = min(w, orig_w - x)
+                h = min(h, orig_h - y)
+                if w <= 0 or h <= 0:
+                    del mask_data["segmentation"]
+                    continue
+
+                cropped_mask = seg_mask[y : y + h, x : x + w]
+
+            # Free the full segmentation array now that we have the crop
+            del mask_data["segmentation"]
 
             cropped_rgb = original_np[y : y + h, x : x + w]
-            cropped_mask = seg_mask[y : y + h, x : x + w]
 
-            # Build RGBA: full-resolution crop + alpha from mask
-            alpha = (cropped_mask * 255).astype(np.uint8)
-            rgba = np.dstack([cropped_rgb, alpha])
+            # Build RGBA directly: full-resolution crop + alpha from mask
+            rgba = np.empty((h, w, 4), dtype=np.uint8)
+            rgba[:, :, :3] = cropped_rgb
+            rgba[:, :, 3] = cropped_mask.astype(np.uint8) * 255
+            actual_area = int(np.count_nonzero(cropped_mask))
+            del cropped_mask
+
             segment_img = Image.fromarray(rgba, "RGBA")
+            del rgba
 
             # Light edge feathering for cleaner compositing in slides
             alpha_channel = segment_img.split()[3]
@@ -141,8 +191,8 @@ class ImageSegmenter:
 
             filename = f"segment_{idx:03d}.png"
             segment_img.save(os.path.join(output_dir, filename))
+            segment_img.close()
 
-            actual_area = int(np.sum(cropped_mask))
             results.append(
                 {
                     "index": idx,

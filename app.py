@@ -4,7 +4,6 @@ Image Segmenter Web App
 Upload an image → SAM 2.1 segments all objects → download as transparent PNGs.
 """
 
-import io
 import os
 import shutil
 import time
@@ -177,14 +176,15 @@ def download_all(session_id):
     if not png_files:
         return jsonify({"error": "No segments found"}), 404
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+    # Write ZIP to a file instead of holding it all in memory.
+    # It gets cleaned up with the session directory.
+    zip_path = os.path.join(session_output_dir, "segments.zip")
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for fname in png_files:
             zf.write(os.path.join(session_output_dir, fname), fname)
-    buf.seek(0)
 
     return send_file(
-        buf,
+        zip_path,
         mimetype="application/zip",
         as_attachment=True,
         download_name="segments.zip",
