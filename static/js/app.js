@@ -217,10 +217,10 @@ function renderResults() {
             toggleSelection(card, seg.index);
         });
 
-        // Individual download (full-res, no upscale)
+        // Individual download (full-res, 2× upscale to match ZIP quality)
         card.querySelector(".segment-download").addEventListener("click", (e) => {
             e.stopPropagation();
-            window.location.href = `/download/${currentSessionId}/${seg.filename}`;
+            window.location.href = `/download/${currentSessionId}/${seg.filename}?upscale=2`;
         });
 
         segmentsGrid.appendChild(card);

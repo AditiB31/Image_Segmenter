@@ -10,9 +10,10 @@ import json
 import os
 import warnings
 
+import cv2
 import numpy as np
 import torch
-from PIL import Image, ImageFilter
+from PIL import Image
 
 # Suppress the expected _C import warning when CUDA extensions aren't built
 warnings.filterwarnings(
@@ -254,43 +255,97 @@ class ImageSegmenter:
         fx, fy, fw, fh = seg_info["bbox_orig"]
         inf_x, inf_y, inf_w, inf_h = seg_info["bbox_inf"]
 
-        # Load compact mask
+        # Load compact mask (at inference resolution)
         npz = np.load(os.path.join(masks_dir, f"{index}.npz"))
         shape = tuple(npz["shape"])
-        mask_crop = (
+        mask_inf = (
             np.unpackbits(npz["mask"])[: shape[0] * shape[1]]
             .reshape(shape)
-            .astype(bool)
+            .astype(np.uint8) * 255
         )
 
-        # Upscale mask to full resolution if needed
-        if scale != 1.0:
-            mask_pil = Image.fromarray(mask_crop.astype(np.uint8) * 255, "L")
-            mask_pil = mask_pil.resize((fw, fh), Image.NEAREST)
-            full_mask = np.array(mask_pil) > 127
-            mask_pil.close()
-            del mask_crop
-        else:
-            full_mask = mask_crop
+        # ── Contour-based boundary smoothing at inference resolution ──────────
+        #
+        # Morphological kernels cannot remove blobs that are connected to the
+        # main shape via wide pixel bridges (e.g. a white oval frame bleeding
+        # into a white slide background).  Instead we:
+        #
+        #   1. Extract the outer contour of the mask.
+        #   2. Apply a circular Gaussian along the contour vertices — this
+        #      rounds off protrusions (including attached noise blobs) in
+        #      proportion to the object's perimeter so the effect is
+        #      resolution-independent.
+        #   3. Re-fill the smoothed polygon to get a clean binary mask.
+        #
+        # Working at inference resolution keeps the contour short (faster) and
+        # means the sigma is naturally scaled to the actual object size.
+        contours, _ = cv2.findContours(
+            mask_inf, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+        )
+        if contours:
+            main = max(contours, key=cv2.contourArea)
+            pts = main[:, 0, :].astype(np.float64)   # (N, 2)
 
-        # Read only the crop region from the original image
+            # Sigma is driven by two constraints:
+            #   - Perimeter-based: len/15 gives ~6.5% of perimeter, which is
+            #     large enough to smooth away attached background blobs whose
+            #     "neck" spans ~3σ contour points.
+            #   - Shape-based cap: 30% of the shorter mask dimension prevents
+            #     over-rounding on small/thin segments like pill buttons.
+            short_dim = float(min(shape))
+            sigma = float(min(len(pts) / 15.0, short_dim * 0.3))
+            sigma = max(sigma, 5.0)
+            ks = int(6 * sigma) | 1           # kernel size (always odd)
+            pad = ks // 2                     # circular wrap-around padding
+
+            t = np.arange(ks) - pad
+            kernel = np.exp(-0.5 * t ** 2 / sigma ** 2)
+            kernel /= kernel.sum()
+
+            smooth = np.empty_like(pts)
+            for axis in range(2):
+                col = pts[:, axis]
+                padded = np.concatenate([col[-pad:], col, col[:pad]])
+                # mode='valid' on a symmetric pad of size ks//2 gives length N
+                smooth[:, axis] = np.convolve(padded, kernel, mode="valid")
+
+            smooth_pts = np.round(smooth).astype(np.int32).reshape(-1, 1, 2)
+            mask_inf = np.zeros_like(mask_inf)
+            cv2.drawContours(mask_inf, [smooth_pts], -1, 255, cv2.FILLED)
+
+        # ── Upscale to full resolution ────────────────────────────────────────
+        # LANCZOS produces a smooth grey gradient at the boundary; we threshold
+        # at 127 later via the Gaussian blur step rather than here, so we keep
+        # the full float range coming out of LANCZOS.
+        if scale != 1.0:
+            mask_pil = Image.fromarray(mask_inf, "L")
+            mask_pil = mask_pil.resize((fw, fh), Image.LANCZOS)
+            full_mask_np = np.array(mask_pil)
+            mask_pil.close()
+        else:
+            full_mask_np = mask_inf
+
+        # ── RGBA assembly ────────────────────────────────────────────────────
         original = Image.open(image_path).convert("RGB")
         cropped_rgb = np.array(original.crop((fx, fy, fx + fw, fy + fh)))
         original.close()
 
-        # Build RGBA
         rgba = np.empty((fh, fw, 4), dtype=np.uint8)
         rgba[:, :, :3] = cropped_rgb
-        rgba[:, :, 3] = full_mask.astype(np.uint8) * 255
-        del cropped_rgb, full_mask
+        rgba[:, :, 3] = full_mask_np
+        del cropped_rgb
 
         segment_img = Image.fromarray(rgba, "RGBA")
         del rgba
 
-        # Edge feathering
-        alpha = segment_img.split()[3]
-        alpha = alpha.filter(ImageFilter.GaussianBlur(radius=0.5))
-        segment_img.putalpha(alpha)
+        # ── Edge feathering at full resolution ───────────────────────────────
+        # Erode trims the soft fringe left by LANCZOS; Gaussian blur creates a
+        # natural alpha falloff rather than a hard binary edge.
+        erode_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        alpha_np = cv2.erode(full_mask_np, erode_k, iterations=1)
+        del full_mask_np
+        alpha_np = cv2.GaussianBlur(alpha_np, (0, 0), sigmaX=2.5)
+        segment_img.putalpha(Image.fromarray(alpha_np, "L"))
 
         # Upscale for sticker-quality output
         if upscale > 1:

@@ -176,9 +176,16 @@ def download(session_id, filename):
     if image_path is None:
         return jsonify({"error": "Original image not found"}), 404
 
-    out_path = os.path.join(session_output_dir, filename)
+    upscale = max(1, int(request.args.get("upscale", 2)))
+    render_dir = os.path.join(session_output_dir, f"render_{upscale}x")
+    out_path = os.path.join(render_dir, filename)
+
     if not os.path.exists(out_path):
-        if segmenter.render_segment(image_path, session_output_dir, idx) is None:
+        os.makedirs(render_dir, exist_ok=True)
+        result = segmenter.render_segment(
+            image_path, session_output_dir, idx, upscale=upscale, out_path=out_path
+        )
+        if result is None:
             return jsonify({"error": "Segment not found"}), 404
 
     return send_file(out_path, as_attachment=True)
@@ -205,7 +212,7 @@ def download_all(session_id):
     all_indices = [s["index"] for s in meta["segments"]]
     data = request.get_json(silent=True) or {}
     indices = data.get("indices", all_indices)
-    upscale = int(data.get("upscale", 2))
+    upscale = max(1, int(data.get("upscale", 2)))
 
     if not indices:
         return jsonify({"error": "No segments selected"}), 400
