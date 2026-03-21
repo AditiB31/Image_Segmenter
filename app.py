@@ -4,6 +4,7 @@ Image Segmenter Web App
 Upload an image → SAM 2.1 segments all objects → download as transparent PNGs.
 """
 
+import json
 import os
 import shutil
 import time
@@ -120,7 +121,7 @@ def segment(session_id):
     # Parse optional parameters
     data = request.get_json(silent=True) or {}
     min_area = data.get("min_area", 500)
-    max_dim = data.get("max_dim", 4096)
+    max_dim = data.get("max_dim", 1536)
 
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
 
@@ -150,38 +151,100 @@ def segment(session_id):
 
 @app.route("/segment-image/<session_id>/<filename>")
 def segment_image(session_id, filename):
+    """Serve thumbnail for gallery preview (small, already on disk)."""
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
-    if not os.path.isdir(session_output_dir):
+    thumbs_dir = os.path.join(session_output_dir, "thumbs")
+    if not os.path.isdir(thumbs_dir):
         return jsonify({"error": "Session not found"}), 404
 
-    return send_from_directory(session_output_dir, filename, mimetype="image/png")
+    return send_from_directory(thumbs_dir, filename, mimetype="image/png")
 
 
 @app.route("/download/<session_id>/<filename>")
 def download(session_id, filename):
+    """Render full-res segment on demand and serve it."""
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
     if not os.path.isdir(session_output_dir):
         return jsonify({"error": "Session not found"}), 404
 
-    return send_from_directory(session_output_dir, filename, as_attachment=True)
+    # Extract index from filename like "segment_003.png"
+    try:
+        idx = int(filename.split("_")[1].split(".")[0])
+    except (IndexError, ValueError):
+        return jsonify({"error": "Invalid filename"}), 400
+
+    # Find original image
+    session_upload_dir = os.path.join(UPLOAD_DIR, session_id)
+    files = os.listdir(session_upload_dir)
+    if not files:
+        return jsonify({"error": "Original image not found"}), 404
+    image_path = os.path.join(session_upload_dir, files[0])
+
+    # Render if not already cached
+    out_path = os.path.join(session_output_dir, filename)
+    if not os.path.exists(out_path):
+        result = segmenter.render_segment(
+            image_path, session_output_dir, idx
+        )
+        if result is None:
+            return jsonify({"error": "Segment not found"}), 404
+
+    return send_file(out_path, as_attachment=True)
 
 
-@app.route("/download-all/<session_id>")
+@app.route("/download-all/<session_id>", methods=["GET", "POST"])
 def download_all(session_id):
+    """Render selected (or all) segments full-res and ZIP them."""
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
     if not os.path.isdir(session_output_dir):
         return jsonify({"error": "Session not found"}), 404
 
-    png_files = sorted(f for f in os.listdir(session_output_dir) if f.endswith(".png"))
-    if not png_files:
+    # Find original image
+    session_upload_dir = os.path.join(UPLOAD_DIR, session_id)
+    files = os.listdir(session_upload_dir)
+    if not files:
+        return jsonify({"error": "Original image not found"}), 404
+    image_path = os.path.join(session_upload_dir, files[0])
+
+    # Load segment metadata
+    meta_path = os.path.join(
+        session_output_dir, "masks", "meta.json"
+    )
+    if not os.path.exists(meta_path):
         return jsonify({"error": "No segments found"}), 404
 
-    # Write ZIP to a file instead of holding it all in memory.
-    # It gets cleaned up with the session directory.
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    all_indices = [s["index"] for s in meta["segments"]]
+
+    # Accept optional list of indices to download
+    data = request.get_json(silent=True) or {}
+    indices = data.get("indices", all_indices)
+
+    if not indices:
+        return jsonify({"error": "No segments selected"}), 400
+
+    # Render each requested segment on demand
+    rendered = []
+    for idx in indices:
+        filename = f"segment_{idx:03d}.png"
+        out_path = os.path.join(session_output_dir, filename)
+        if not os.path.exists(out_path):
+            result = segmenter.render_segment(
+                image_path, session_output_dir, idx
+            )
+            if result is None:
+                continue
+        rendered.append((out_path, filename))
+
+    if not rendered:
+        return jsonify({"error": "No segments could be rendered"}), 404
+
     zip_path = os.path.join(session_output_dir, "segments.zip")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for fname in png_files:
-            zf.write(os.path.join(session_output_dir, fname), fname)
+        for path, fname in rendered:
+            zf.write(path, fname)
 
     return send_file(
         zip_path,
