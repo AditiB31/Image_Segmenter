@@ -186,7 +186,7 @@ def download(session_id, filename):
 
 @app.route("/download-all/<session_id>", methods=["GET", "POST"])
 def download_all(session_id):
-    """Render selected (or all) segments full-res and ZIP them."""
+    """Render selected (or all) segments at 2× resolution and ZIP them."""
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
     if not os.path.isdir(session_output_dir):
         return jsonify({"error": "Session not found"}), 404
@@ -205,32 +205,45 @@ def download_all(session_id):
     all_indices = [s["index"] for s in meta["segments"]]
     data = request.get_json(silent=True) or {}
     indices = data.get("indices", all_indices)
+    upscale = int(data.get("upscale", 2))
 
     if not indices:
         return jsonify({"error": "No segments selected"}), 400
 
+    # Render upscaled segments into a temporary sub-directory
+    render_dir = os.path.join(session_output_dir, f"render_{upscale}x")
+    os.makedirs(render_dir, exist_ok=True)
+
     rendered = []
     for idx in indices:
         filename = f"segment_{idx:03d}.png"
-        out_path = os.path.join(session_output_dir, filename)
+        out_path = os.path.join(render_dir, filename)
         if not os.path.exists(out_path):
-            if segmenter.render_segment(image_path, session_output_dir, idx, meta=meta) is None:
+            result = segmenter.render_segment(
+                image_path, session_output_dir, idx,
+                meta=meta, upscale=upscale, out_path=out_path,
+            )
+            if result is None:
                 continue
         rendered.append((out_path, filename))
 
     if not rendered:
+        shutil.rmtree(render_dir, ignore_errors=True)
         return jsonify({"error": "No segments could be rendered"}), 404
 
-    zip_path = os.path.join(session_output_dir, "segments.zip")
+    zip_path = os.path.join(session_output_dir, f"segments_{upscale}x.zip")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for path, fname in rendered:
             zf.write(path, fname)
+
+    # Free disk space: remove individual renders, keep only the zip
+    shutil.rmtree(render_dir, ignore_errors=True)
 
     return send_file(
         zip_path,
         mimetype="application/zip",
         as_attachment=True,
-        download_name="segments.zip",
+        download_name="stickers.zip",
     )
 
 

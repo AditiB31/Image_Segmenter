@@ -45,17 +45,23 @@
                 <div class="results-info">
                     <span id="segment-count"></span>
                     <span id="visible-count"></span>
+                    <span id="selected-count" class="selected-count-badge"></span>
                 </div>
                 <div class="results-controls">
+                    <div class="selection-controls">
+                        <button id="select-all-btn" class="btn-link">Select all</button>
+                        <button id="clear-selection-btn" class="btn-link">Clear</button>
+                    </div>
                     <div class="filter-control">
                         <label for="area-filter">Min area:</label>
                         <input type="range" id="area-filter" min="0" max="10000" value="0" step="100">
                         <span id="area-value">0 px</span>
                     </div>
-                    <button id="download-all-btn" class="btn btn-primary">Download All as ZIP</button>
+                    <button id="download-btn" class="btn btn-primary" disabled>Download All as ZIP</button>
                     <button id="start-over-btn" class="btn btn-secondary">Start Over</button>
                 </div>
             </div>
+            <p class="selection-hint">Click segments to select · Downloads are 2× upscaled for sticker quality</p>
             <div id="segments-grid" class="segments-grid"></div>
         </section>
     </main>

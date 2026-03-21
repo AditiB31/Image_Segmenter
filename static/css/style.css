@@ -125,11 +125,42 @@ main {
     margin-left: 0.5rem;
 }
 
+.selected-count-badge {
+    display: inline-block;
+    margin-left: 0.5rem;
+    color: #0071e3;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
 .results-controls {
     display: flex;
     align-items: center;
     gap: 1rem;
     flex-wrap: wrap;
+}
+
+.selection-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.btn-link {
+    background: none;
+    border: none;
+    color: #86868b;
+    font-size: 0.8rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.btn-link:hover {
+    color: #1d1d1f;
+    background: #f2f2f7;
 }
 
 .filter-control {
@@ -166,8 +197,13 @@ main {
     color: #fff;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
     background: #0077ed;
+}
+
+.btn-primary:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
 .btn-secondary {
@@ -177,6 +213,14 @@ main {
 
 .btn-secondary:hover {
     background: #d1d1d6;
+}
+
+/* Selection hint */
+.selection-hint {
+    font-size: 0.8rem;
+    color: #aeaeb2;
+    margin-bottom: 0.75rem;
+    text-align: center;
 }
 
 /* Segments Grid */
@@ -191,12 +235,21 @@ main {
     border-radius: 12px;
     overflow: hidden;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, outline 0.1s ease;
+    cursor: pointer;
+    outline: 2px solid transparent;
+    outline-offset: -2px;
 }
 
 .segment-card:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    outline-color: rgba(0, 113, 227, 0.3);
+}
+
+.segment-card.selected {
+    outline-color: #0071e3;
+    box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.2);
 }
 
 .segment-preview {
@@ -205,6 +258,7 @@ main {
     align-items: center;
     justify-content: center;
     padding: 0.5rem;
+    position: relative;
     /* Checkerboard background to show transparency */
     background-color: #fff;
     background-image:
@@ -214,6 +268,41 @@ main {
         linear-gradient(-45deg, transparent 75%, #e8e8e8 75%);
     background-size: 16px 16px;
     background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+/* Selection indicator badge */
+.selection-indicator {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.85);
+    background: rgba(0, 0, 0, 0.18);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    pointer-events: none;
+    backdrop-filter: blur(2px);
+}
+
+.segment-card.selected .selection-indicator {
+    background: #0071e3;
+    border-color: #fff;
+}
+
+.selection-indicator svg {
+    width: 11px;
+    height: 11px;
+    color: white;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.segment-card.selected .selection-indicator svg {
+    opacity: 1;
 }
 
 .segment-preview img {

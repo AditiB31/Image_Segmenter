@@ -231,11 +231,13 @@ class ImageSegmenter:
         return results
 
     @staticmethod
-    def render_segment(image_path, output_dir, index, meta=None):
+    def render_segment(image_path, output_dir, index, meta=None, upscale=1, out_path=None):
         """
         Render a single full-resolution RGBA PNG on demand.
 
         Pass meta (already-loaded dict) to avoid re-reading meta.json.
+        upscale > 1 resizes the output (e.g. 2 = 2× for sticker quality).
+        out_path overrides the default save location.
         Returns the path to the rendered file, or None on failure.
         """
         masks_dir = os.path.join(output_dir, "masks")
@@ -290,9 +292,18 @@ class ImageSegmenter:
         alpha = alpha.filter(ImageFilter.GaussianBlur(radius=0.5))
         segment_img.putalpha(alpha)
 
-        filename = f"segment_{index:03d}.png"
-        out_path = os.path.join(output_dir, filename)
-        segment_img.save(out_path)
+        # Upscale for sticker-quality output
+        if upscale > 1:
+            new_size = (segment_img.width * upscale, segment_img.height * upscale)
+            segment_img = segment_img.resize(new_size, Image.LANCZOS)
+
+        if out_path is None:
+            filename = f"segment_{index:03d}.png"
+            out_path = os.path.join(output_dir, filename)
+
+        segment_img.save(out_path, optimize=True)
         segment_img.close()
+        del segment_img
+        gc.collect()
 
         return out_path
