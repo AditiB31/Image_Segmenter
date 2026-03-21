@@ -46,6 +46,13 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def _get_image_path(session_id):
+    """Return path to the original uploaded image, or None if missing."""
+    session_upload_dir = os.path.join(UPLOAD_DIR, session_id)
+    files = os.listdir(session_upload_dir) if os.path.isdir(session_upload_dir) else []
+    return os.path.join(session_upload_dir, files[0]) if files else None
+
+
 def cleanup_old_sessions():
     """Remove session directories older than TTL."""
     now = time.time()
@@ -107,16 +114,9 @@ def upload():
 def segment(session_id):
     cleanup_old_sessions()
 
-    # Find uploaded image
-    session_upload_dir = os.path.join(UPLOAD_DIR, session_id)
-    if not os.path.isdir(session_upload_dir):
+    image_path = _get_image_path(session_id)
+    if image_path is None:
         return jsonify({"error": "Session not found"}), 404
-
-    files = os.listdir(session_upload_dir)
-    if not files:
-        return jsonify({"error": "No uploaded image found"}), 404
-
-    image_path = os.path.join(session_upload_dir, files[0])
 
     # Parse optional parameters
     data = request.get_json(silent=True) or {}
@@ -167,26 +167,18 @@ def download(session_id, filename):
     if not os.path.isdir(session_output_dir):
         return jsonify({"error": "Session not found"}), 404
 
-    # Extract index from filename like "segment_003.png"
     try:
         idx = int(filename.split("_")[1].split(".")[0])
     except (IndexError, ValueError):
         return jsonify({"error": "Invalid filename"}), 400
 
-    # Find original image
-    session_upload_dir = os.path.join(UPLOAD_DIR, session_id)
-    files = os.listdir(session_upload_dir)
-    if not files:
+    image_path = _get_image_path(session_id)
+    if image_path is None:
         return jsonify({"error": "Original image not found"}), 404
-    image_path = os.path.join(session_upload_dir, files[0])
 
-    # Render if not already cached
     out_path = os.path.join(session_output_dir, filename)
     if not os.path.exists(out_path):
-        result = segmenter.render_segment(
-            image_path, session_output_dir, idx
-        )
-        if result is None:
+        if segmenter.render_segment(image_path, session_output_dir, idx) is None:
             return jsonify({"error": "Segment not found"}), 404
 
     return send_file(out_path, as_attachment=True)
@@ -199,17 +191,11 @@ def download_all(session_id):
     if not os.path.isdir(session_output_dir):
         return jsonify({"error": "Session not found"}), 404
 
-    # Find original image
-    session_upload_dir = os.path.join(UPLOAD_DIR, session_id)
-    files = os.listdir(session_upload_dir)
-    if not files:
+    image_path = _get_image_path(session_id)
+    if image_path is None:
         return jsonify({"error": "Original image not found"}), 404
-    image_path = os.path.join(session_upload_dir, files[0])
 
-    # Load segment metadata
-    meta_path = os.path.join(
-        session_output_dir, "masks", "meta.json"
-    )
+    meta_path = os.path.join(session_output_dir, "masks", "meta.json")
     if not os.path.exists(meta_path):
         return jsonify({"error": "No segments found"}), 404
 
@@ -217,24 +203,18 @@ def download_all(session_id):
         meta = json.load(f)
 
     all_indices = [s["index"] for s in meta["segments"]]
-
-    # Accept optional list of indices to download
     data = request.get_json(silent=True) or {}
     indices = data.get("indices", all_indices)
 
     if not indices:
         return jsonify({"error": "No segments selected"}), 400
 
-    # Render each requested segment on demand
     rendered = []
     for idx in indices:
         filename = f"segment_{idx:03d}.png"
         out_path = os.path.join(session_output_dir, filename)
         if not os.path.exists(out_path):
-            result = segmenter.render_segment(
-                image_path, session_output_dir, idx
-            )
-            if result is None:
+            if segmenter.render_segment(image_path, session_output_dir, idx, meta=meta) is None:
                 continue
         rendered.append((out_path, filename))
 

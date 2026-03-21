@@ -97,7 +97,6 @@ class ImageSegmenter:
             new_w = int(orig_w * scale)
             new_h = int(orig_h * scale)
             inference_image = np.array(original.resize((new_w, new_h), Image.LANCZOS))
-            # Small copy for thumbnails — reuse inference image
             thumb_source = inference_image
         else:
             inference_image = np.array(original)
@@ -232,23 +231,20 @@ class ImageSegmenter:
         return results
 
     @staticmethod
-    def render_segment(image_path, output_dir, index):
+    def render_segment(image_path, output_dir, index, meta=None):
         """
         Render a single full-resolution RGBA PNG on demand.
 
+        Pass meta (already-loaded dict) to avoid re-reading meta.json.
         Returns the path to the rendered file, or None on failure.
         """
         masks_dir = os.path.join(output_dir, "masks")
-        meta_path = os.path.join(masks_dir, "meta.json")
 
-        with open(meta_path) as f:
-            meta = json.load(f)
+        if meta is None:
+            with open(os.path.join(masks_dir, "meta.json")) as f:
+                meta = json.load(f)
 
-        seg_info = None
-        for s in meta["segments"]:
-            if s["index"] == index:
-                seg_info = s
-                break
+        seg_info = next((s for s in meta["segments"] if s["index"] == index), None)
         if seg_info is None:
             return None
 
