@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Segmenter</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header>
+        <h1>Image Segmenter</h1>
+        <p class="subtitle">Upload an image to extract all objects as transparent PNGs</p>
+    </header>
+
+    <main>
+        <!-- Upload Section -->
+        <section id="upload-section">
+            <div id="drop-zone">
+                <div class="drop-zone-content">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    <p>Drag & drop an image here</p>
+                    <p class="hint">or click to browse</p>
+                    <p class="formats">JPG, PNG, WebP, BMP, TIFF — up to 50 MB</p>
+                </div>
+                <input type="file" id="file-input" accept="image/*" hidden>
+            </div>
+        </section>
+
+        <!-- Processing Section -->
+        <section id="processing-section" hidden>
+            <div class="processing-content">
+                <div class="spinner"></div>
+                <p id="status-text">Uploading image...</p>
+                <p class="hint" id="status-hint">This may take a few seconds</p>
+            </div>
+        </section>
+
+        <!-- Results Section -->
+        <section id="results-section" hidden>
+            <div class="results-header">
+                <div class="results-info">
+                    <span id="segment-count"></span>
+                    <span id="visible-count"></span>
+                </div>
+                <div class="results-controls">
+                    <div class="filter-control">
+                        <label for="area-filter">Min area:</label>
+                        <input type="range" id="area-filter" min="0" max="10000" value="0" step="100">
+                        <span id="area-value">0 px</span>
+                    </div>
+                    <button id="download-all-btn" class="btn btn-primary">Download All as ZIP</button>
+                    <button id="start-over-btn" class="btn btn-secondary">Start Over</button>
+                </div>
+            </div>
+            <div id="segments-grid" class="segments-grid"></div>
+        </section>
+    </main>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
