@@ -11,13 +11,16 @@ import urllib.request
 
 CHECKPOINT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkpoints")
 CHECKPOINT_NAME = "sam2.1_hiera_base_plus.pt"
-CHECKPOINT_URL = "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt"
+CHECKPOINT_URL = (
+    "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt"
+)
 
 
 def install_sam2():
     """Install SAM 2 from GitHub source with CUDA build disabled."""
     try:
         import sam2  # noqa: F401
+
         print("[OK] SAM 2 is already installed.")
         return
     except ImportError:
@@ -28,7 +31,10 @@ def install_sam2():
     env["SAM2_BUILD_CUDA"] = "0"
     subprocess.check_call(
         [
-            sys.executable, "-m", "pip", "install",
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
             "git+https://github.com/facebookresearch/sam2.git",
         ],
         env=env,
@@ -54,9 +60,15 @@ def download_checkpoint():
             pct = min(100, downloaded * 100 / total_size)
             mb_down = downloaded / (1024 * 1024)
             mb_total = total_size / (1024 * 1024)
-            print(f"\r     {mb_down:.1f} / {mb_total:.1f} MB ({pct:.0f}%)", end="", flush=True)
+            print(
+                f"\r     {mb_down:.1f} / {mb_total:.1f} MB ({pct:.0f}%)",
+                end="",
+                flush=True,
+            )
 
-    urllib.request.urlretrieve(CHECKPOINT_URL, checkpoint_path, reporthook=progress_hook)
+    urllib.request.urlretrieve(
+        CHECKPOINT_URL, checkpoint_path, reporthook=progress_hook
+    )
     print()
 
     size_mb = os.path.getsize(checkpoint_path) / (1024 * 1024)

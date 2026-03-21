@@ -13,7 +13,14 @@ import zipfile
 
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
-from flask import Flask, jsonify, request, send_file, send_from_directory, render_template
+from flask import (
+    Flask,
+    jsonify,
+    request,
+    send_file,
+    send_from_directory,
+    render_template,
+)
 from PIL import Image
 
 from segmenter import ImageSegmenter
@@ -47,7 +54,10 @@ def cleanup_old_sessions():
             continue
         for name in os.listdir(base):
             path = os.path.join(base, name)
-            if os.path.isdir(path) and now - os.path.getmtime(path) > SESSION_TTL_SECONDS:
+            if (
+                os.path.isdir(path)
+                and now - os.path.getmtime(path) > SESSION_TTL_SECONDS
+            ):
                 shutil.rmtree(path, ignore_errors=True)
 
 
@@ -65,7 +75,9 @@ def upload():
 
     file = request.files["file"]
     if not file.filename or not allowed_file(file.filename):
-        return jsonify({"error": f"Invalid file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
+        return jsonify(
+            {"error": f"Invalid file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"}
+        ), 400
 
     session_id = uuid.uuid4().hex[:12]
     ext = file.filename.rsplit(".", 1)[1].lower()
@@ -81,12 +93,14 @@ def upload():
     with Image.open(filepath) as img:
         width, height = img.size
 
-    return jsonify({
-        "session_id": session_id,
-        "filename": file.filename,
-        "width": width,
-        "height": height,
-    })
+    return jsonify(
+        {
+            "session_id": session_id,
+            "filename": file.filename,
+            "width": width,
+            "height": height,
+        }
+    )
 
 
 @app.route("/segment/<session_id>", methods=["POST"])
@@ -107,26 +121,32 @@ def segment(session_id):
     # Parse optional parameters
     data = request.get_json(silent=True) or {}
     min_area = data.get("min_area", 500)
-    max_dim = data.get("max_dim", 2048)
+    max_dim = data.get("max_dim", 4096)
 
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
 
     try:
-        segments = segmenter.segment(image_path, session_output_dir, min_area=min_area, max_dim=max_dim)
+        segments = segmenter.segment(
+            image_path, session_output_dir, min_area=min_area, max_dim=max_dim
+        )
     except RuntimeError as e:
         if "out of memory" in str(e).lower() or "mps" in str(e).lower():
-            return jsonify({
-                "error": "Out of memory. Try a smaller image or reduce max_dim.",
-            }), 500
+            return jsonify(
+                {
+                    "error": "Out of memory. Try a smaller image or reduce max_dim.",
+                }
+            ), 500
         raise
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    return jsonify({
-        "session_id": session_id,
-        "segment_count": len(segments),
-        "segments": segments,
-    })
+    return jsonify(
+        {
+            "session_id": session_id,
+            "segment_count": len(segments),
+            "segments": segments,
+        }
+    )
 
 
 @app.route("/segment-image/<session_id>/<filename>")
@@ -135,11 +155,7 @@ def segment_image(session_id, filename):
     if not os.path.isdir(session_output_dir):
         return jsonify({"error": "Session not found"}), 404
 
-    filepath = os.path.join(session_output_dir, filename)
-    if not os.path.isfile(filepath):
-        return jsonify({"error": "File not found"}), 404
-
-    return send_file(filepath, mimetype="image/png")
+    return send_from_directory(session_output_dir, filename, mimetype="image/png")
 
 
 @app.route("/download/<session_id>/<filename>")
@@ -167,7 +183,12 @@ def download_all(session_id):
             zf.write(os.path.join(session_output_dir, fname), fname)
     buf.seek(0)
 
-    return send_file(buf, mimetype="application/zip", as_attachment=True, download_name="segments.zip")
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="segments.zip",
+    )
 
 
 if __name__ == "__main__":
