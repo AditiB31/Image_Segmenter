@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
     <title>Image Segmenter</title>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
@@ -66,14 +67,36 @@
                         <input type="range" id="area-filter" min="0" max="10000" value="0" step="100">
                         <span id="area-value">0 px</span>
                     </div>
+                    <div class="upscale-control">
+                        <label for="upscale-select">Quality:</label>
+                        <select id="upscale-select">
+                            <option value="1">1× Original</option>
+                            <option value="2" selected>2× Sticker</option>
+                            <option value="4">4× Print</option>
+                        </select>
+                    </div>
                     <button id="download-btn" class="btn btn-primary" disabled>Download All as ZIP</button>
                     <button id="start-over-btn" class="btn btn-secondary">Start Over</button>
                 </div>
             </div>
-            <p class="selection-hint">Click segments to select · Downloads are 2× upscaled for sticker quality</p>
+            <p class="selection-hint">Click segments to select · Choose quality level before downloading</p>
             <div id="segments-grid" class="segments-grid"></div>
         </section>
     </main>
+
+    <!-- Preview Modal -->
+    <div id="preview-modal" class="modal-overlay">
+        <div class="modal-content">
+            <button class="modal-close" id="modal-close">&times;</button>
+            <div class="modal-preview">
+                <img id="modal-image" src="" alt="Segment preview">
+            </div>
+            <div class="modal-footer">
+                <div class="modal-info" id="modal-info"></div>
+                <button id="modal-download" class="btn btn-primary">Download</button>
+            </div>
+        </div>
+    </div>
 
     <script src="/static/js/app.js"></script>
 </body>

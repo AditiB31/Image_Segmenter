@@ -17,6 +17,14 @@ const areaFilter = document.getElementById("area-filter");
 const areaValue = document.getElementById("area-value");
 const sortBy = document.getElementById("sort-by");
 const previewImage = document.getElementById("preview-image");
+const upscaleSelect = document.getElementById("upscale-select");
+
+// Modal elements
+const previewModal = document.getElementById("preview-modal");
+const modalClose = document.getElementById("modal-close");
+const modalImage = document.getElementById("modal-image");
+const modalInfo = document.getElementById("modal-info");
+const modalDownload = document.getElementById("modal-download");
 
 let currentSessionId = null;
 let allSegments = [];
@@ -24,8 +32,13 @@ let selectedIndices = new Set();
 
 const downloadIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
 const checkIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`;
+const zoomIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>`;
 
-// Drag and drop
+function getUpscale() {
+    return parseInt(upscaleSelect.value);
+}
+
+// ── Drag and drop ────────────────────────────────────────────────────
 dropZone.addEventListener("click", () => fileInput.click());
 
 dropZone.addEventListener("dragover", (e) => {
@@ -48,7 +61,7 @@ fileInput.addEventListener("change", () => {
     if (fileInput.files[0]) handleFile(fileInput.files[0]);
 });
 
-// Start over
+// ── Start over ───────────────────────────────────────────────────────
 startOverBtn.addEventListener("click", () => {
     showSection("upload");
     segmentsGrid.innerHTML = "";
@@ -59,33 +72,41 @@ startOverBtn.addEventListener("click", () => {
     previewImage.hidden = true;
     previewImage.src = "";
     sortBy.value = "area-desc";
+    upscaleSelect.value = "2";
 });
 
-// Area filter
+// ── Area filter ──────────────────────────────────────────────────────
 areaFilter.addEventListener("input", () => {
     const minArea = parseInt(areaFilter.value);
     areaValue.textContent = minArea.toLocaleString() + " px";
     filterSegments(minArea);
 });
 
-// Sort handler
+// ── Sort handler ─────────────────────────────────────────────────────
 sortBy.addEventListener("change", () => {
     sortSegments(sortBy.value);
 });
 
-// Keyboard shortcuts
+// ── Keyboard shortcuts ───────────────────────────────────────────────
 document.addEventListener("keydown", (e) => {
-    if (resultsSection.hidden) return;
-    if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+    // Close modal on Escape
+    if (e.key === "Escape") {
+        if (previewModal.classList.contains("active")) {
+            closeModal();
+            return;
+        }
+        if (!resultsSection.hidden) {
+            clearSelectionBtn.click();
+        }
+    }
+    // Select all with Cmd/Ctrl+A
+    if (!resultsSection.hidden && (e.ctrlKey || e.metaKey) && e.key === "a") {
         e.preventDefault();
         selectAllBtn.click();
     }
-    if (e.key === "Escape") {
-        clearSelectionBtn.click();
-    }
 });
 
-// Select all visible
+// ── Select all visible ───────────────────────────────────────────────
 selectAllBtn.addEventListener("click", () => {
     const visibleCards = segmentsGrid.querySelectorAll('.segment-card:not([style*="display: none"])');
     visibleCards.forEach((card) => {
@@ -96,7 +117,7 @@ selectAllBtn.addEventListener("click", () => {
     updateSelectionUI();
 });
 
-// Clear selection
+// ── Clear selection ──────────────────────────────────────────────────
 clearSelectionBtn.addEventListener("click", () => {
     selectedIndices.clear();
     segmentsGrid.querySelectorAll(".segment-card.selected").forEach((card) => {
@@ -105,12 +126,13 @@ clearSelectionBtn.addEventListener("click", () => {
     updateSelectionUI();
 });
 
-// Download button
+// ── Download ─────────────────────────────────────────────────────────
 downloadBtn.addEventListener("click", async () => {
     const indices = selectedIndices.size > 0
         ? [...selectedIndices]
         : allSegments.map((s) => s.index);
 
+    const upscale = getUpscale();
     downloadBtn.disabled = true;
     downloadBtn.textContent = "Preparing…";
 
@@ -118,7 +140,7 @@ downloadBtn.addEventListener("click", async () => {
         const res = await fetch(`/download-all/${currentSessionId}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ indices, upscale: 2 }),
+            body: JSON.stringify({ indices, upscale }),
         });
 
         if (!res.ok) {
@@ -130,7 +152,7 @@ downloadBtn.addEventListener("click", async () => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = "stickers.zip";
+        a.download = `segments_${upscale}x.zip`;
         a.click();
         URL.revokeObjectURL(url);
     } catch (err) {
@@ -141,6 +163,31 @@ downloadBtn.addEventListener("click", async () => {
     }
 });
 
+// ── Modal ────────────────────────────────────────────────────────────
+function openModal(seg) {
+    modalImage.src = `/segment-image/${currentSessionId}/${seg.filename}`;
+    modalInfo.innerHTML = `
+        <strong>Segment ${seg.index}</strong><br>
+        ${seg.width} × ${seg.height} px &middot;
+        ${seg.area.toLocaleString()} px² &middot;
+        IoU ${seg.predicted_iou}
+    `;
+    modalDownload.onclick = () => {
+        window.location.href = `/download/${currentSessionId}/${seg.filename}?upscale=${getUpscale()}`;
+    };
+    previewModal.classList.add("active");
+}
+
+function closeModal() {
+    previewModal.classList.remove("active");
+}
+
+modalClose.addEventListener("click", closeModal);
+previewModal.addEventListener("click", (e) => {
+    if (e.target === previewModal) closeModal();
+});
+
+// ── File handling ────────────────────────────────────────────────────
 async function handleFile(file) {
     const validTypes = ["image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff"];
     if (!validTypes.includes(file.type) && !file.name.match(/\.(jpe?g|png|webp|bmp|tiff?)$/i)) {
@@ -175,7 +222,7 @@ async function handleFile(file) {
         currentSessionId = uploadData.session_id;
 
         statusText.textContent = "Segmenting image...";
-        statusHint.textContent = `${uploadData.width} × ${uploadData.height} px — this may take a few seconds`;
+        statusHint.textContent = `${uploadData.width} × ${uploadData.height} px — this may take a moment`;
 
         const segRes = await fetch(`/segment/${currentSessionId}`, {
             method: "POST",
@@ -197,6 +244,7 @@ async function handleFile(file) {
     }
 }
 
+// ── Render results ───────────────────────────────────────────────────
 function renderResults() {
     showSection("results");
     segmentCount.textContent = `${allSegments.length} segments found`;
@@ -233,22 +281,33 @@ function renderResults() {
                     ${seg.width} × ${seg.height} px<br>
                     ${seg.area.toLocaleString()} px area
                 </div>
-                <button class="segment-download" title="Download full-res PNG">
-                    ${downloadIcon}
-                </button>
+                <div class="segment-actions">
+                    <button class="segment-zoom" title="Preview">
+                        ${zoomIcon}
+                    </button>
+                    <button class="segment-download" title="Download full-res PNG">
+                        ${downloadIcon}
+                    </button>
+                </div>
             </div>
         `;
 
-        // Toggle selection on card click (not on the download button)
+        // Toggle selection on card click (not on action buttons)
         card.addEventListener("click", (e) => {
-            if (e.target.closest(".segment-download")) return;
+            if (e.target.closest(".segment-download") || e.target.closest(".segment-zoom")) return;
             toggleSelection(card, seg.index);
         });
 
-        // Individual download (full-res, 2× upscale to match ZIP quality)
+        // Zoom preview
+        card.querySelector(".segment-zoom").addEventListener("click", (e) => {
+            e.stopPropagation();
+            openModal(seg);
+        });
+
+        // Individual download (uses selected upscale level)
         card.querySelector(".segment-download").addEventListener("click", (e) => {
             e.stopPropagation();
-            window.location.href = `/download/${currentSessionId}/${seg.filename}?upscale=2`;
+            window.location.href = `/download/${currentSessionId}/${seg.filename}?upscale=${getUpscale()}`;
         });
 
         segmentsGrid.appendChild(card);
@@ -271,15 +330,19 @@ function toggleSelection(card, index) {
 
 function updateSelectionUI() {
     const n = selectedIndices.size;
+    const upscale = getUpscale();
     if (n === 0) {
         selectedCount.textContent = "";
-        downloadBtn.textContent = `Download All as ZIP`;
+        downloadBtn.textContent = `Download All ${upscale}× ZIP`;
     } else {
         selectedCount.textContent = `${n} selected`;
-        downloadBtn.textContent = `Download Selected (${n}) as ZIP`;
+        downloadBtn.textContent = `Download ${n} Selected ${upscale}× ZIP`;
     }
     downloadBtn.disabled = allSegments.length === 0;
 }
+
+// Update button text when upscale changes
+upscaleSelect.addEventListener("change", updateSelectionUI);
 
 function filterSegments(minArea) {
     const cards = segmentsGrid.querySelectorAll(".segment-card");

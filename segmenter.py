@@ -32,8 +32,8 @@ CHECKPOINT_PATH = os.path.join(
 )
 MODEL_CFG = "configs/sam2.1/sam2.1_hiera_b+.yaml"
 
-# Thumbnails for the gallery preview
-THUMB_MAX = 320
+# Thumbnails for the gallery preview (512 for retina sharpness)
+THUMB_MAX = 512
 
 
 class ImageSegmenter:
@@ -50,7 +50,7 @@ class ImageSegmenter:
         self.mask_generator = SAM2AutomaticMaskGenerator(
             model=sam2_model,
             points_per_side=32,
-            pred_iou_thresh=0.86,
+            pred_iou_thresh=0.84,
             stability_score_thresh=0.90,
             min_mask_region_area=100,
         )
@@ -138,7 +138,17 @@ class ImageSegmenter:
         del original
 
         with torch.inference_mode():
-            all_masks = self.mask_generator.generate(inference_image)
+            # Float16 autocast on Apple Silicon — ~2x faster, same quality
+            # (sensitive ops like softmax stay float32 automatically)
+            if self.device.type == "mps":
+                try:
+                    with torch.autocast("mps", dtype=torch.float16):
+                        all_masks = self.mask_generator.generate(inference_image)
+                except RuntimeError:
+                    # Fall back to float32 if MPS autocast fails
+                    all_masks = self.mask_generator.generate(inference_image)
+            else:
+                all_masks = self.mask_generator.generate(inference_image)
 
         # Free GPU memory immediately
         if self.device.type == "mps":
@@ -266,7 +276,7 @@ class ImageSegmenter:
         return results
 
     @staticmethod
-    def render_segment(image_path, output_dir, index, meta=None, upscale=1, out_path=None):
+    def render_segment(image_path, output_dir, index, meta=None, upscale=1, out_path=None, image_array=None):
         """
         Render a single full-resolution RGBA PNG on demand.
 
@@ -298,6 +308,12 @@ class ImageSegmenter:
             .astype(np.uint8) * 255
         )
 
+        # ── Morphological cleanup ────────────────────────────────────────────
+        # Remove isolated noise pixels (1-2px) that SAM sometimes produces at
+        # mask boundaries before contour extraction.
+        morph_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        mask_inf = cv2.morphologyEx(mask_inf, cv2.MORPH_OPEN, morph_k)
+
         # ── Contour-based boundary smoothing at inference resolution ──────────
         #
         # Morphological kernels cannot remove blobs that are connected to the
@@ -323,7 +339,7 @@ class ImageSegmenter:
             # Sigma spans ~1-3% of the perimeter — enough to damp the
             # pixel-level rasterization noise in SAM's binary mask without
             # reshaping corners or curves of the actual object.
-            sigma = max(2.0, min(len(pts) / 250.0, 12.0))
+            sigma = max(2.5, min(len(pts) / 180.0, 18.0))
             ks = int(6 * sigma) | 1           # kernel size (always odd)
             pad = ks // 2                     # circular wrap-around padding
 
@@ -355,9 +371,13 @@ class ImageSegmenter:
             full_mask_np = mask_inf
 
         # ── RGBA assembly ────────────────────────────────────────────────────
-        original = Image.open(image_path).convert("RGB")
-        cropped_rgb = np.array(original.crop((fx, fy, fx + fw, fy + fh)))
-        original.close()
+        if image_array is not None:
+            # Batch path: image already loaded as numpy array (thread-safe read)
+            cropped_rgb = image_array[fy:fy + fh, fx:fx + fw].copy()
+        else:
+            original = Image.open(image_path).convert("RGB")
+            cropped_rgb = np.array(original.crop((fx, fy, fx + fw, fy + fh)))
+            original.close()
 
         rgba = np.empty((fh, fw, 4), dtype=np.uint8)
         rgba[:, :, :3] = cropped_rgb
@@ -376,10 +396,12 @@ class ImageSegmenter:
         binary_mask = (full_mask_np > 127).astype(np.uint8)
         del full_mask_np
         dist = cv2.distanceTransform(binary_mask, cv2.DIST_L2, 5)
-        feather_px = max(1.5, min(min(fw, fh) * 0.008, 4.0))
+        feather_px = max(2.0, min(min(fw, fh) * 0.012, 8.0))
         alpha_float = np.clip(dist / feather_px, 0.0, 1.0)
+        # Smoothstep t²(3−2t) for natural-looking edge falloff
+        alpha_float = alpha_float * alpha_float * (3.0 - 2.0 * alpha_float)
         alpha_np = (alpha_float * 255).astype(np.uint8)
-        alpha_np = cv2.GaussianBlur(alpha_np, (3, 3), sigmaX=0.5)
+        alpha_np = cv2.GaussianBlur(alpha_np, (5, 5), sigmaX=0.8)
         segment_img.putalpha(Image.fromarray(alpha_np, "L"))
 
         # Upscale for sticker-quality output

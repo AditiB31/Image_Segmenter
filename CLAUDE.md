@@ -42,5 +42,6 @@ The SAM 2.1 model loads into memory at startup (takes a few seconds). There is n
 - `PYTORCH_ENABLE_MPS_FALLBACK=1` is set in app.py to handle unsupported MPS ops.
 - The model checkpoint lives at `checkpoints/sam2.1_hiera_base_plus.pt` (gitignored).
 - `uploads/` and `outputs/` are gitignored working directories for session data.
-- Max upload size is 50MB. Images larger than `max_dim` (default 4096px) are resized for inference, then masks are upscaled back.
+- Max upload size is 50MB. Images larger than `max_dim` (default 3072px) are resized for inference, then masks are upscaled back.
 - Segments are capped at 200 per image, sorted by area descending, filtered by `min_area` (default 500px).
+- SAM runs at 3072px inference resolution with `torch.autocast` float16 on MPS for better quality and throughput on Apple Silicon.

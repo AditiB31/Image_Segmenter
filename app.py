@@ -12,6 +12,8 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import numpy as np
+
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 from flask import (
@@ -122,7 +124,7 @@ def segment(session_id):
     # Parse optional parameters
     data = request.get_json(silent=True) or {}
     min_area = data.get("min_area", 500)
-    max_dim = data.get("max_dim", 2048)
+    max_dim = data.get("max_dim", 3072)
 
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
 
@@ -222,6 +224,10 @@ def download_all(session_id):
     render_dir = os.path.join(session_output_dir, f"render_{upscale}x")
     os.makedirs(render_dir, exist_ok=True)
 
+    # Load original image once; share across threads (numpy reads are thread-safe)
+    with Image.open(image_path) as _img:
+        image_array = np.array(_img.convert("RGB"))
+
     def _render_one(idx):
         filename = f"segment_{idx:03d}.png"
         out_path = os.path.join(render_dir, filename)
@@ -229,13 +235,14 @@ def download_all(session_id):
             result = segmenter.render_segment(
                 image_path, session_output_dir, idx,
                 meta=meta, upscale=upscale, out_path=out_path,
+                image_array=image_array,
             )
             if result is None:
                 return None
         return (out_path, filename)
 
     rendered = []
-    workers = min(os.cpu_count() or 4, 6)
+    workers = min(os.cpu_count() or 4, 8)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_render_one, idx): idx for idx in indices}
         for future in as_completed(futures):
