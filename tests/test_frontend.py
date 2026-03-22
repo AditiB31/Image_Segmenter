@@ -91,8 +91,10 @@ class TestJavaScript:
         assert "function startManualAnnotateImage" in self.js
 
     def test_is_image_file_function(self):
-        """isImageFile utility function exists."""
+        """isImageFile utility function exists and returns boolean."""
         assert "function isImageFile" in self.js
+        # Should use .test() not .match() for boolean return
+        assert ".test(file.name)" in self.js
 
     def test_image_gallery_navigation(self):
         """Multi-image navigation in navigateToSlide exists."""
@@ -106,6 +108,24 @@ class TestJavaScript:
         """Upload file/folder buttons have click handlers."""
         assert "uploadFileBtn.addEventListener" in self.js
         assert "uploadFolderBtn.addEventListener" in self.js
+
+    def test_get_total_slides_helper(self):
+        """getTotalSlides helper function exists to avoid duplication."""
+        assert "function getTotalSlides" in self.js
+
+    def test_no_duplicate_keyboard_listeners(self):
+        """Only one keydown listener should exist (no duplicates)."""
+        count = self.js.count('document.addEventListener("keydown"')
+        assert count == 1, f"Expected 1 keydown listener, found {count}"
+
+    def test_no_redundant_state_variable(self):
+        """currentImageIndex should not exist (replaced by currentSlideIndex)."""
+        assert "currentImageIndex" not in self.js
+
+    def test_file_inputs_reset(self):
+        """All file inputs should be reset in resetState."""
+        assert 'fileInputMultiple.value = ""' in self.js
+        assert 'folderInput.value = ""' in self.js
 
 
 class TestCSS:

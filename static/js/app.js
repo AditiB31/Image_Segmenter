@@ -85,7 +85,6 @@ let browseImagesDir = null;
 
 // Multi-image state (folder upload)
 let currentImageList = [];     // [{session_id, filename, width, height, name}]
-let currentImageIndex = null;
 
 // Annotation state
 let annotateImage = null;
@@ -138,6 +137,12 @@ function getUpscale() {
     return parseInt(upscaleSelect.value);
 }
 
+function getTotalSlides() {
+    if (currentMode === "browse") return currentRunSlides.length;
+    if (currentMode === "image") return currentImageList.length;
+    return currentPdfSlides.length;
+}
+
 // ── URL Helpers (mode-aware) ──────────────────────────────────────────
 function getThumbUrl(seg) {
     if (currentMode === "browse") {
@@ -174,7 +179,7 @@ function switchMode(mode, autoOpen = false) {
 
     if (mode === "image") {
         showSection("upload");
-        if (autoOpen) setTimeout(() => fileInput.click(), 100);
+        if (autoOpen) setTimeout(() => fileInputMultiple.click(), 100);
     } else if (mode === "pdf") {
         showSection("pdf-upload");
         if (autoOpen) setTimeout(() => pdfFileInput.click(), 100);
@@ -201,12 +206,13 @@ function resetState() {
     extractedSegments = [];
     currentUploadData = null;
     currentImageList = [];
-    currentImageIndex = null;
     annotateImage = null;
     annotateSlideIndex = null;
     currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
     boxDragStart = null;
     fileInput.value = "";
+    fileInputMultiple.value = "";
+    folderInput.value = "";
     pdfFileInput.value = "";
     previewImage.hidden = true;
     previewImage.src = "";
@@ -217,7 +223,7 @@ function resetState() {
 // ── Image Drag & Drop ─────────────────────────────────────────────────
 function isImageFile(file) {
     const validTypes = ["image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff"];
-    return validTypes.includes(file.type) || file.name.match(/\.(jpe?g|png|webp|bmp|tiff?)$/i);
+    return validTypes.includes(file.type) || /\.(jpe?g|png|webp|bmp|tiff?)$/i.test(file.name);
 }
 
 dropZone.addEventListener("click", (e) => {
@@ -252,8 +258,10 @@ fileInputMultiple.addEventListener("change", () => {
 });
 folderInput.addEventListener("change", () => {
     const files = [...folderInput.files].filter(isImageFile);
-    if (files.length > 0) {
+    if (files.length > 1) {
         handleImageFiles(files);
+    } else if (files.length === 1) {
+        handleImageFile(files[0]);
     } else {
         showToast("No image files found in the selected folder.");
     }
@@ -311,8 +319,6 @@ backToSourceBtn.addEventListener("click", () => {
         loadRuns();
     } else if (currentMode === "pdf") {
         showSection("pdf-upload");
-    } else if (currentMode === "image" && currentImageList.length > 0) {
-        showSection("upload");
     } else {
         showSection("upload");
     }
@@ -323,7 +329,7 @@ prevSlideBtn.addEventListener("click", () => {
     if (currentSlideIndex > 0) navigateToSlide(currentSlideIndex - 1);
 });
 nextSlideBtn.addEventListener("click", () => {
-    const totalSlides = currentMode === "browse" ? currentRunSlides.length : (currentMode === "image" ? currentImageList.length : currentPdfSlides.length);
+    const totalSlides = getTotalSlides();
     if (currentSlideIndex < totalSlides - 1) navigateToSlide(currentSlideIndex + 1);
 });
 
@@ -348,18 +354,6 @@ areaFilter.addEventListener("input", () => {
 // ── Sort handler ──────────────────────────────────────────────────────
 sortBy.addEventListener("change", () => sortSegments(sortBy.value));
 
-// ── Keyboard shortcuts ────────────────────────────────────────────────
-document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-        if (previewModal.classList.contains("active")) { closeModal(); return; }
-        if (!resultsSection.hidden) clearSelectionBtn.click();
-    }
-    if (!resultsSection.hidden && (e.ctrlKey || e.metaKey) && e.key === "a") {
-        e.preventDefault();
-        selectAllBtn.click();
-    }
-});
-
 // ── Select all / clear ────────────────────────────────────────────────
 selectAllBtn.addEventListener("click", () => {
     const visibleCards = segmentsGrid.querySelectorAll('.segment-card:not([style*="display: none"])');
@@ -376,18 +370,17 @@ clearSelectionBtn.addEventListener("click", () => {
     updateSelectionUI();
 });
 
-// Keyboard shortcuts for segment selection
+// ── Keyboard shortcuts ────────────────────────────────────────────────
 document.addEventListener("keydown", (e) => {
-    // Only when results section is visible
-    if (resultsSection.hidden) return;
-    // Don't intercept when typing in inputs
+    if (e.key === "Escape") {
+        if (previewModal.classList.contains("active")) { closeModal(); return; }
+        if (!resultsSection.hidden) clearSelectionBtn.click();
+        return;
+    }
     if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-
-    if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+    if (!resultsSection.hidden && (e.ctrlKey || e.metaKey) && e.key === "a") {
         e.preventDefault();
         selectAllBtn.click();
-    } else if (e.key === "Escape") {
-        clearSelectionBtn.click();
     }
 });
 
@@ -560,41 +553,18 @@ async function handleImageFiles(files) {
 }
 
 function renderImageGallery() {
-    showSection("slides");
-    slidesTitle.textContent = `${currentImageList.length} Images`;
-    slidesSubtitle.textContent = "";
-
-    slidesGrid.innerHTML = "";
-
-    currentImageList.forEach((img, idx) => {
-        const card = document.createElement("div");
-        card.className = "slide-card";
-        card.dataset.index = idx;
-
-        const thumbSrc = `/original-image/${img.session_id}`;
-
-        card.innerHTML = `
-            <div class="slide-preview">
-                <img src="${thumbSrc}" alt="${img.name}" loading="lazy">
-                <div class="slide-badge slide-badge-action">Click to annotate</div>
-            </div>
-            <div class="slide-info">
-                <span class="slide-name">${img.name.replace(/_/g, " ")}</span>
-                <span class="slide-dims">${img.width} x ${img.height}</span>
-            </div>
-        `;
-
-        card.addEventListener("click", () => {
-            startManualAnnotateImage(idx);
-        });
-
-        slidesGrid.appendChild(card);
-    });
+    const slides = currentImageList.map((img) => ({
+        name: img.name,
+        filename: img.filename,
+        width: img.width,
+        height: img.height,
+        _session_id: img.session_id,
+    }));
+    renderSlidesGrid(`${currentImageList.length} Images`, slides, false);
 }
 
 function startManualAnnotateImage(idx) {
     const img = currentImageList[idx];
-    currentImageIndex = idx;
     currentSlideIndex = idx;
     currentSessionId = img.session_id;
     currentSourceName = img.name;
@@ -660,7 +630,9 @@ function renderSlidesGrid(title, slides, cached) {
         if (isSegmented || hasSegments) card.classList.add("segmented");
 
         let thumbSrc;
-        if (currentMode === "pdf") {
+        if (currentMode === "image" && slide._session_id) {
+            thumbSrc = `/original-image/${slide._session_id}`;
+        } else if (currentMode === "pdf") {
             thumbSrc = `/slide-image/${currentSessionId}/${slide.filename || slide.name + ".png"}`;
         } else if (currentMode === "browse" && currentRunName) {
             thumbSrc = `/browse/slide-image/${currentRunName}/${slide.name}`;
@@ -684,7 +656,9 @@ function renderSlidesGrid(title, slides, cached) {
         `;
 
         card.addEventListener("click", () => {
-            if (currentMode === "pdf") {
+            if (currentMode === "image") {
+                startManualAnnotateImage(idx);
+            } else if (currentMode === "pdf") {
                 startManualAnnotateSlide(idx);
             } else if (currentMode === "browse") {
                 loadBrowseSlideSegments(currentRunName, slide.name, idx);
@@ -694,9 +668,6 @@ function renderSlidesGrid(title, slides, cached) {
         slidesGrid.appendChild(card);
     });
 }
-
-// ── Segment a PDF Slide ───────────────────────────────────────────────
-// segmentSlide removed — auto-segmenting is handled by autoSegmentCurrent()
 
 // ── Browse Runs ───────────────────────────────────────────────────────
 async function loadRuns() {
@@ -815,12 +786,18 @@ function renderResults() {
 
     if (hasSlides && currentSlideIndex !== null) {
         slideNav.hidden = false;
-        const totalSlides = currentMode === "browse" ? currentRunSlides.length : (currentMode === "image" ? currentImageList.length : currentPdfSlides.length);
+        const totalSlides = getTotalSlides();
         const navPrefix = currentMode === "image" ? "Image" : "Slide";
         slideNavLabel.textContent = `${navPrefix} ${currentSlideIndex + 1} / ${totalSlides}`;
         slideNavLabel.style.cursor = "pointer";
-        slideNavLabel.title = "Back to slides grid";
-        slideNavLabel.onclick = () => showSection("slides");
+        slideNavLabel.title = currentMode === "image" ? "Back to images" : "Back to slides grid";
+        slideNavLabel.onclick = () => {
+            if (currentMode === "image" && currentImageList.length > 1) {
+                renderImageGallery();
+            } else {
+                showSection("slides");
+            }
+        };
         prevSlideBtn.disabled = currentSlideIndex <= 0;
         nextSlideBtn.disabled = currentSlideIndex >= totalSlides - 1;
     } else {
