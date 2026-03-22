@@ -388,6 +388,59 @@ def download_all(session_id):
     )
 
 
+# ── Manual Annotation Routes ───────────────────────────────────────────
+
+
+@app.route("/original-image/<session_id>")
+def original_image(session_id):
+    """Serve the original uploaded image for the annotation canvas."""
+    image_path = _get_image_path(session_id)
+    if image_path is None:
+        return jsonify({"error": "Session not found"}), 404
+    return send_file(image_path)
+
+
+@app.route("/annotate/<session_id>", methods=["POST"])
+def annotate(session_id):
+    """Run SAM prediction with user-provided point/box/contour prompts."""
+    cleanup_old_sessions()
+
+    image_path = _get_image_path(session_id)
+    if image_path is None:
+        return jsonify({"error": "Session not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    prompts = data.get("prompts", [])
+    if not prompts:
+        return jsonify({"error": "No prompts provided"}), 400
+
+    max_dim = data.get("max_dim", cfg["max_dim"])
+    session_output_dir = os.path.join(OUTPUT_DIR, session_id)
+
+    try:
+        segments = segmenter.predict_with_prompts(
+            image_path, session_output_dir, prompts, max_dim=max_dim
+        )
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower() or "mps" in str(e).lower():
+            return jsonify(
+                {"error": "Out of memory. Try a smaller image."}
+            ), 500
+        raise
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    _cleanup_memory()
+
+    return jsonify(
+        {
+            "session_id": session_id,
+            "segment_count": len(segments),
+            "segments": segments,
+        }
+    )
+
+
 # ── PDF Upload Routes ──────────────────────────────────────────────────
 
 

@@ -53,6 +53,13 @@ const runsList = document.getElementById("runs-list");
 const browseLoading = document.getElementById("browse-loading");
 const browseEmpty = document.getElementById("browse-empty");
 
+// Mode choice section
+const modeChoiceSection = document.getElementById("mode-choice-section");
+
+// Annotation section
+const annotateSection = document.getElementById("annotate-section");
+const annotateCanvas = document.getElementById("annotate-canvas");
+
 // ── State ─────────────────────────────────────────────────────────────
 let currentMode = "image";       // "image" | "pdf" | "browse"
 let currentSessionId = null;
@@ -71,6 +78,15 @@ let segmentedSlides = new Set();  // track which slides have been segmented
 let currentRunName = null;
 let currentRunSlides = [];
 let browseImagesDir = null;
+
+// Annotation state
+let annotateImage = null;
+let annotateScale = 1;
+let annotateTool = "point";
+let currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
+let extractedSegments = [];
+let boxDragStart = null;
+let currentUploadData = null;
 
 // ── Toast Notifications ───────────────────────────────────────────────
 const toastContainer = document.getElementById("toast-container");
@@ -171,6 +187,11 @@ function resetState() {
     browseImagesDir = null;
     segmentedSlides.clear();
     currentSourceName = "";
+    extractedSegments = [];
+    currentUploadData = null;
+    annotateImage = null;
+    currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
+    boxDragStart = null;
     fileInput.value = "";
     pdfFileInput.value = "";
     previewImage.hidden = true;
@@ -423,21 +444,10 @@ async function handleImageFile(file) {
         const uploadData = await uploadRes.json();
         currentSessionId = uploadData.session_id;
         currentSourceName = uploadData.filename.replace(/\.[^.]+$/, "");
+        currentUploadData = uploadData;
 
-        statusText.textContent = "Segmenting image...";
-        statusHint.textContent = `${uploadData.width} x ${uploadData.height} px -- this may take a moment`;
-
-        const segRes = await fetch(`/segment/${currentSessionId}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ min_area: 100 }),
-        });
-        if (!segRes.ok) throw new Error(await getErrorMessage(segRes, "Segmentation failed"));
-        const segData = await segRes.json();
-        allSegments = segData.segments;
-        selectedIndices.clear();
-        currentSlideName = null;
-        renderResults();
+        // Show mode choice instead of auto-segmenting
+        showModeChoice(uploadData);
     } catch (err) {
         showSection("upload");
         showToast("Error: " + err.message);
@@ -830,9 +840,392 @@ function sortSegments(criterion) {
 // ── Section Switching ─────────────────────────────────────────────────
 function showSection(name) {
     uploadSection.hidden = name !== "upload";
+    modeChoiceSection.hidden = name !== "mode-choice";
     pdfUploadSection.hidden = name !== "pdf-upload";
     browseSection.hidden = name !== "browse";
     slidesSection.hidden = name !== "slides";
     processingSection.hidden = name !== "processing";
+    annotateSection.hidden = name !== "annotate";
     resultsSection.hidden = name !== "results";
 }
+
+// ── Mode Choice ───────────────────────────────────────────────────────
+
+function showModeChoice(uploadData) {
+    const img = document.getElementById("mode-choice-image");
+    img.src = previewImage.src;
+    img.hidden = false;
+    document.getElementById("mode-choice-info").textContent =
+        `${uploadData.filename} \u2014 ${uploadData.width} \u00d7 ${uploadData.height} px`;
+    showSection("mode-choice");
+}
+
+document.getElementById("auto-segment-btn").addEventListener("click", autoSegmentImage);
+document.getElementById("manual-annotate-btn").addEventListener("click", startManualAnnotate);
+document.getElementById("mode-choice-reupload").addEventListener("click", (e) => {
+    e.preventDefault();
+    switchMode("image");
+});
+
+async function autoSegmentImage() {
+    showSection("processing");
+    statusText.textContent = "Segmenting image...";
+    statusHint.textContent = `${currentUploadData.width} \u00d7 ${currentUploadData.height} px \u2014 this may take a moment`;
+
+    try {
+        const segRes = await fetch(`/segment/${currentSessionId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ min_area: 100 }),
+        });
+        if (!segRes.ok) throw new Error(await getErrorMessage(segRes, "Segmentation failed"));
+        const segData = await segRes.json();
+        allSegments = segData.segments;
+        selectedIndices.clear();
+        currentSlideName = null;
+        renderResults();
+    } catch (err) {
+        showSection("mode-choice");
+        showToast("Error: " + err.message);
+    }
+}
+
+// ── Manual Annotation ─────────────────────────────────────────────────
+
+function startManualAnnotate() {
+    extractedSegments = [];
+    currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
+    boxDragStart = null;
+    showSection("annotate");
+    setupAnnotateCanvas();
+    renderAnnotateSegments();
+}
+
+function setupAnnotateCanvas() {
+    const img = new Image();
+    img.onload = () => {
+        annotateImage = img;
+        resizeAnnotateCanvas();
+        redrawAnnotateCanvas();
+    };
+    img.src = `/original-image/${currentSessionId}`;
+}
+
+function resizeAnnotateCanvas() {
+    if (!annotateImage) return;
+    const wrap = document.querySelector(".annotate-canvas-wrap");
+    const maxW = wrap.clientWidth - 32 || 900;
+    const maxH = window.innerHeight * 0.55;
+    const imgW = annotateImage.naturalWidth;
+    const imgH = annotateImage.naturalHeight;
+    annotateScale = Math.min(maxW / imgW, maxH / imgH, 1);
+    annotateCanvas.width = Math.round(imgW * annotateScale);
+    annotateCanvas.height = Math.round(imgH * annotateScale);
+}
+
+function redrawAnnotateCanvas() {
+    if (!annotateImage) return;
+    const ctx = annotateCanvas.getContext("2d");
+    const w = annotateCanvas.width;
+    const h = annotateCanvas.height;
+    const s = annotateScale;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(annotateImage, 0, 0, w, h);
+
+    // Draw points
+    currentPrompt.points.forEach((pt) => {
+        ctx.beginPath();
+        ctx.arc(pt.x * s, pt.y * s, 7, 0, Math.PI * 2);
+        ctx.fillStyle = pt.label === 1 ? "rgba(0, 200, 0, 0.85)" : "rgba(255, 50, 50, 0.85)";
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 11px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(pt.label === 1 ? "+" : "\u2212", pt.x * s, pt.y * s + 1);
+    });
+
+    // Draw contour
+    if (currentPrompt.contour.length > 0) {
+        ctx.beginPath();
+        ctx.moveTo(currentPrompt.contour[0].x * s, currentPrompt.contour[0].y * s);
+        for (let i = 1; i < currentPrompt.contour.length; i++) {
+            ctx.lineTo(currentPrompt.contour[i].x * s, currentPrompt.contour[i].y * s);
+        }
+        if (currentPrompt.contourClosed) {
+            ctx.closePath();
+            ctx.fillStyle = "rgba(0, 113, 227, 0.1)";
+            ctx.fill();
+        }
+        ctx.strokeStyle = "rgba(0, 113, 227, 0.9)";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        currentPrompt.contour.forEach((pt, i) => {
+            ctx.beginPath();
+            ctx.arc(pt.x * s, pt.y * s, i === 0 ? 6 : 4, 0, Math.PI * 2);
+            ctx.fillStyle = i === 0 ? "rgba(0, 113, 227, 0.9)" : "rgba(0, 113, 227, 0.6)";
+            ctx.fill();
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+        });
+    }
+
+    // Draw box
+    if (currentPrompt.box) {
+        const b = currentPrompt.box;
+        ctx.strokeStyle = "rgba(0, 113, 227, 0.9)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(b.x1 * s, b.y1 * s, (b.x2 - b.x1) * s, (b.y2 - b.y1) * s);
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(0, 113, 227, 0.08)";
+        ctx.fillRect(b.x1 * s, b.y1 * s, (b.x2 - b.x1) * s, (b.y2 - b.y1) * s);
+    }
+}
+
+// ── Canvas Mouse Events ───────────────────────────────────────────────
+
+annotateCanvas.addEventListener("click", (e) => {
+    if (annotateTool === "point") {
+        const origX = e.offsetX / annotateScale;
+        const origY = e.offsetY / annotateScale;
+        currentPrompt.points.push({ x: origX, y: origY, label: 1 });
+        redrawAnnotateCanvas();
+    } else if (annotateTool === "polygon") {
+        if (currentPrompt.contourClosed) return;
+        const origX = e.offsetX / annotateScale;
+        const origY = e.offsetY / annotateScale;
+        // Close polygon when clicking near first vertex
+        if (currentPrompt.contour.length >= 3) {
+            const first = currentPrompt.contour[0];
+            const dist = Math.hypot((first.x - origX) * annotateScale, (first.y - origY) * annotateScale);
+            if (dist < 12) {
+                currentPrompt.contourClosed = true;
+                redrawAnnotateCanvas();
+                return;
+            }
+        }
+        currentPrompt.contour.push({ x: origX, y: origY });
+        redrawAnnotateCanvas();
+    }
+});
+
+annotateCanvas.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    if (annotateTool === "point") {
+        const origX = e.offsetX / annotateScale;
+        const origY = e.offsetY / annotateScale;
+        currentPrompt.points.push({ x: origX, y: origY, label: 0 });
+        redrawAnnotateCanvas();
+    }
+});
+
+// Box tool: drag to draw
+annotateCanvas.addEventListener("mousedown", (e) => {
+    if (annotateTool !== "box" || e.button !== 0) return;
+    boxDragStart = { x: e.offsetX / annotateScale, y: e.offsetY / annotateScale };
+    currentPrompt.box = null;
+});
+
+annotateCanvas.addEventListener("mousemove", (e) => {
+    if (annotateTool !== "box" || !boxDragStart) return;
+    const x = e.offsetX / annotateScale;
+    const y = e.offsetY / annotateScale;
+    currentPrompt.box = {
+        x1: Math.min(boxDragStart.x, x),
+        y1: Math.min(boxDragStart.y, y),
+        x2: Math.max(boxDragStart.x, x),
+        y2: Math.max(boxDragStart.y, y),
+    };
+    redrawAnnotateCanvas();
+});
+
+annotateCanvas.addEventListener("mouseup", (e) => {
+    if (annotateTool !== "box") return;
+    boxDragStart = null;
+});
+
+// ── Annotation Tool Switching ─────────────────────────────────────────
+
+document.querySelectorAll(".annotate-tool").forEach((btn) => {
+    btn.addEventListener("click", () => {
+        annotateTool = btn.dataset.tool;
+        document.querySelectorAll(".annotate-tool").forEach((b) =>
+            b.classList.toggle("active", b === btn)
+        );
+        updateAnnotateHint();
+    });
+});
+
+function updateAnnotateHint() {
+    const hint = document.getElementById("annotate-tool-hint");
+    switch (annotateTool) {
+        case "point":
+            hint.textContent = "Left-click: foreground point \u00b7 Right-click: background point";
+            break;
+        case "polygon":
+            hint.textContent = "Click to add vertices \u00b7 Click near first point to close polygon";
+            break;
+        case "box":
+            hint.textContent = "Click and drag to draw a bounding box";
+            break;
+    }
+}
+
+// ── Undo / Clear ──────────────────────────────────────────────────────
+
+document.getElementById("annotate-undo-btn").addEventListener("click", () => {
+    if (annotateTool === "point" && currentPrompt.points.length > 0) {
+        currentPrompt.points.pop();
+    } else if (annotateTool === "polygon") {
+        if (currentPrompt.contourClosed) {
+            currentPrompt.contourClosed = false;
+        } else if (currentPrompt.contour.length > 0) {
+            currentPrompt.contour.pop();
+        }
+    } else if (annotateTool === "box") {
+        currentPrompt.box = null;
+    }
+    redrawAnnotateCanvas();
+});
+
+document.getElementById("annotate-clear-btn").addEventListener("click", () => {
+    currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
+    redrawAnnotateCanvas();
+});
+
+// ── Extract Segment ───────────────────────────────────────────────────
+
+document.getElementById("annotate-extract-btn").addEventListener("click", extractSegment);
+
+async function extractSegment() {
+    const prompt = {};
+
+    if (currentPrompt.points.length > 0) {
+        prompt.points = currentPrompt.points.map((p) => [p.x, p.y]);
+        prompt.labels = currentPrompt.points.map((p) => p.label);
+    }
+
+    if (currentPrompt.contour.length >= 3) {
+        prompt.contour = currentPrompt.contour.map((p) => [p.x, p.y]);
+    }
+
+    if (currentPrompt.box) {
+        prompt.box = [currentPrompt.box.x1, currentPrompt.box.y1, currentPrompt.box.x2, currentPrompt.box.y2];
+    }
+
+    if (!prompt.points && !prompt.contour && !prompt.box) {
+        showToast("Add annotations first (click points, draw polygon, or draw box).");
+        return;
+    }
+
+    const extractBtn = document.getElementById("annotate-extract-btn");
+    extractBtn.disabled = true;
+    extractBtn.textContent = "Extracting...";
+
+    try {
+        const res = await fetch(`/annotate/${currentSessionId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompts: [prompt] }),
+        });
+        if (!res.ok) throw new Error(await getErrorMessage(res, "Extraction failed"));
+        const data = await res.json();
+
+        if (data.segments.length === 0) {
+            showToast("No segment found. Try different annotations.");
+            return;
+        }
+
+        extractedSegments.push(...data.segments);
+        currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
+        redrawAnnotateCanvas();
+        renderAnnotateSegments();
+        showToast(`Extracted ${data.segments.length} segment(s)`, "success", 2000);
+    } catch (err) {
+        showToast("Error: " + err.message);
+    } finally {
+        extractBtn.disabled = false;
+        extractBtn.textContent = "Extract Segment";
+    }
+}
+
+// ── Annotation Segments Gallery ───────────────────────────────────────
+
+function renderAnnotateSegments() {
+    const grid = document.getElementById("annotate-segments-grid");
+    const countEl = document.getElementById("annotate-segment-count");
+    const doneBtn = document.getElementById("annotate-done-btn");
+    const dlBtn = document.getElementById("annotate-download-btn");
+
+    countEl.textContent = `${extractedSegments.length} segment${extractedSegments.length !== 1 ? "s" : ""} extracted`;
+    doneBtn.disabled = extractedSegments.length === 0;
+    dlBtn.disabled = extractedSegments.length === 0;
+
+    grid.innerHTML = "";
+    extractedSegments.forEach((seg, i) => {
+        const card = document.createElement("div");
+        card.className = "annotate-segment-card";
+        card.innerHTML = `
+            <img src="/segment-image/${currentSessionId}/${seg.filename}" alt="Segment ${seg.index}">
+            <button class="annotate-segment-remove" title="Remove">&times;</button>
+        `;
+        card.querySelector(".annotate-segment-remove").addEventListener("click", (e) => {
+            e.stopPropagation();
+            extractedSegments.splice(i, 1);
+            renderAnnotateSegments();
+        });
+        grid.appendChild(card);
+    });
+}
+
+// ── Done / Back ───────────────────────────────────────────────────────
+
+document.getElementById("annotate-done-btn").addEventListener("click", () => {
+    allSegments = [...extractedSegments];
+    selectedIndices.clear();
+    currentSlideName = null;
+    renderResults();
+});
+
+document.getElementById("annotate-back-btn").addEventListener("click", () => {
+    showModeChoice(currentUploadData);
+});
+
+// ── Annotation Download ───────────────────────────────────────────────
+
+document.getElementById("annotate-download-btn").addEventListener("click", async () => {
+    const indices = extractedSegments.map((s) => s.index);
+    const upscale = parseInt(document.getElementById("annotate-upscale-select").value);
+    const dlBtn = document.getElementById("annotate-download-btn");
+    dlBtn.disabled = true;
+    dlBtn.textContent = "Preparing...";
+
+    try {
+        const res = await fetch(`/download-all/${currentSessionId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ indices, upscale }),
+        });
+        if (!res.ok) throw new Error(await getErrorMessage(res, "Download failed"));
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${currentSourceName || "segments"}_manual_${upscale}x.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (err) {
+        showToast("Error: " + err.message);
+    } finally {
+        dlBtn.disabled = false;
+        dlBtn.textContent = "Download All ZIP";
+    }
+});

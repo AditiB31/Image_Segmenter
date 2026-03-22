@@ -28,6 +28,7 @@ warnings.filterwarnings(
 
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator  # noqa: E402
 from sam2.build_sam import build_sam2  # noqa: E402
+from sam2.sam2_image_predictor import SAM2ImagePredictor  # noqa: E402
 
 CHECKPOINT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -55,6 +56,7 @@ class ImageSegmenter:
             stability_score_thresh=cfg["stability_score_thresh"],
             min_mask_region_area=cfg["min_mask_region_area"],
         )
+        self.predictor = SAM2ImagePredictor(sam2_model)
         print("SAM 2.1 model loaded successfully.")
 
     def _get_device(self):
@@ -381,6 +383,236 @@ class ImageSegmenter:
         if self.device.type == "mps":
             torch.mps.empty_cache()
         gc.collect()
+
+        return results
+
+    def predict_with_prompts(self, image_path, output_dir, prompts, max_dim=None):
+        """
+        Segment objects using point/box/contour prompts via SAM2ImagePredictor.
+
+        Args:
+            image_path: Path to the image file
+            output_dir: Directory to save masks and thumbnails
+            prompts: List of dicts, each with optional keys:
+                - points: [[x,y], ...] in original image coordinates
+                - labels: [1/0, ...] (1=foreground, 0=background)
+                - contour: [[x,y], ...] polygon vertices in original coords
+                - box: [x1, y1, x2, y2] in original coords
+            max_dim: Max image dimension for inference (default from config)
+
+        Returns: List of segment metadata dicts
+        """
+        if max_dim is None:
+            max_dim = cfg["max_dim"]
+        thumb_max = cfg["thumb_max"]
+
+        os.makedirs(output_dir, exist_ok=True)
+        masks_dir = os.path.join(output_dir, "masks")
+        thumbs_dir = os.path.join(output_dir, "thumbs")
+        os.makedirs(masks_dir, exist_ok=True)
+        os.makedirs(thumbs_dir, exist_ok=True)
+
+        # Load existing segments to determine starting index
+        meta_path = os.path.join(masks_dir, "meta.json")
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                existing_meta = json.load(f)
+            existing_segments = existing_meta.get("segments", [])
+            start_idx = max((s["index"] for s in existing_segments), default=-1) + 1
+        else:
+            existing_segments = []
+            start_idx = 0
+
+        with Image.open(image_path) as original:
+            original = original.convert("RGB")
+            orig_w, orig_h = original.size
+
+            scale = 1.0
+            if max(orig_w, orig_h) > max_dim:
+                scale = max_dim / max(orig_w, orig_h)
+                new_w = int(orig_w * scale)
+                new_h = int(orig_h * scale)
+                inference_image = np.array(
+                    original.resize((new_w, new_h), Image.LANCZOS)
+                )
+            else:
+                inference_image = np.array(original)
+
+        # Set image on predictor (computes embeddings once)
+        with torch.inference_mode():
+            if self.device.type == "mps":
+                try:
+                    with torch.autocast("mps", dtype=torch.float16):
+                        self.predictor.set_image(inference_image)
+                except RuntimeError:
+                    self.predictor.set_image(inference_image)
+            else:
+                self.predictor.set_image(inference_image)
+
+        results = []
+
+        for prompt_offset, prompt in enumerate(prompts):
+            idx = start_idx + prompt_offset
+            predict_kwargs = {"multimask_output": True}
+            point_coords = []
+            point_labels = []
+
+            # Collect explicit point prompts
+            if prompt.get("points"):
+                for pt, lbl in zip(prompt["points"], prompt["labels"]):
+                    point_coords.append([pt[0] * scale, pt[1] * scale])
+                    point_labels.append(lbl)
+
+            # Handle contour: bounding box + sampled foreground points
+            if prompt.get("contour") and len(prompt["contour"]) >= 3:
+                contour_pts = prompt["contour"]
+                xs = [p[0] for p in contour_pts]
+                ys = [p[1] for p in contour_pts]
+                predict_kwargs["box"] = np.array(
+                    [min(xs) * scale, min(ys) * scale,
+                     max(xs) * scale, max(ys) * scale],
+                    dtype=np.float32,
+                )
+                # Sample up to 10 points along the contour
+                n_samples = min(len(contour_pts), 10)
+                step = max(1, len(contour_pts) // n_samples)
+                for i in range(0, len(contour_pts), step):
+                    pt = contour_pts[i]
+                    point_coords.append([pt[0] * scale, pt[1] * scale])
+                    point_labels.append(1)
+
+            # Handle explicit box prompt
+            if prompt.get("box") and "box" not in predict_kwargs:
+                b = prompt["box"]
+                predict_kwargs["box"] = np.array(
+                    [b[0] * scale, b[1] * scale, b[2] * scale, b[3] * scale],
+                    dtype=np.float32,
+                )
+
+            if point_coords:
+                predict_kwargs["point_coords"] = np.array(
+                    point_coords, dtype=np.float32
+                )
+                predict_kwargs["point_labels"] = np.array(
+                    point_labels, dtype=np.int32
+                )
+
+            if len(predict_kwargs) <= 1:
+                continue  # no valid prompts
+
+            with torch.inference_mode():
+                if self.device.type == "mps":
+                    try:
+                        with torch.autocast("mps", dtype=torch.float16):
+                            masks, scores, _ = self.predictor.predict(
+                                **predict_kwargs
+                            )
+                    except RuntimeError:
+                        masks, scores, _ = self.predictor.predict(
+                            **predict_kwargs
+                        )
+                else:
+                    masks, scores, _ = self.predictor.predict(**predict_kwargs)
+
+            # Take best mask (highest confidence)
+            best = int(np.argmax(scores))
+            mask = masks[best]
+
+            if not np.any(mask):
+                continue
+
+            # Compute bounding box of mask
+            rows = np.any(mask, axis=1)
+            cols = np.any(mask, axis=0)
+            rmin, rmax = np.where(rows)[0][[0, -1]]
+            cmin, cmax = np.where(cols)[0][[0, -1]]
+
+            inf_x, inf_y = int(cmin), int(rmin)
+            inf_w = int(cmax - cmin + 1)
+            inf_h = int(rmax - rmin + 1)
+
+            if scale != 1.0:
+                fx = max(0, round(inf_x / scale))
+                fy = max(0, round(inf_y / scale))
+                fw = min(round(inf_w / scale), orig_w - fx)
+                fh = min(round(inf_h / scale), orig_h - fy)
+            else:
+                fx, fy, fw, fh = inf_x, inf_y, inf_w, inf_h
+                fw = min(fw, orig_w - fx)
+                fh = min(fh, orig_h - fy)
+
+            if fw <= 0 or fh <= 0:
+                continue
+
+            mask_crop = mask[inf_y:inf_y + inf_h, inf_x:inf_x + inf_w]
+            inv_scale_sq = 1.0 / (scale * scale) if scale != 1.0 else 1.0
+            actual_area = int(np.count_nonzero(mask_crop) * inv_scale_sq)
+
+            # Save compact mask crop
+            np.savez_compressed(
+                os.path.join(masks_dir, f"{idx}.npz"),
+                mask=np.packbits(mask_crop.astype(np.uint8)),
+                shape=np.array(mask_crop.shape, dtype=np.int32),
+            )
+
+            # Generate thumbnail
+            thumb_rgb = inference_image[
+                inf_y:inf_y + inf_h, inf_x:inf_x + inf_w
+            ]
+            th, tw = thumb_rgb.shape[:2]
+            thumb_rgba = np.empty((th, tw, 4), dtype=np.uint8)
+            thumb_rgba[:, :, :3] = thumb_rgb
+            thumb_rgba[:, :, 3] = mask_crop.astype(np.uint8) * 255
+
+            thumb_img = Image.fromarray(thumb_rgba, "RGBA")
+            del thumb_rgba
+
+            t_scale = min(thumb_max / tw, thumb_max / th, 1.0)
+            if t_scale < 1.0:
+                thumb_img = thumb_img.resize(
+                    (max(1, int(tw * t_scale)), max(1, int(th * t_scale))),
+                    Image.BILINEAR,
+                )
+
+            thumb_name = f"segment_{idx:03d}.png"
+            thumb_img.save(os.path.join(thumbs_dir, thumb_name))
+            thumb_img.close()
+
+            del mask_crop
+
+            results.append({
+                "index": idx,
+                "filename": thumb_name,
+                "area": actual_area,
+                "width": fw,
+                "height": fh,
+                "predicted_iou": round(float(scores[best]), 3),
+                "bbox_orig": [fx, fy, fw, fh],
+                "bbox_inf": [inf_x, inf_y, inf_w, inf_h],
+            })
+
+        # Free predictor state and GPU memory
+        if hasattr(self.predictor, "reset_predictor"):
+            self.predictor.reset_predictor()
+
+        del inference_image
+        if self.device.type == "mps":
+            torch.mps.empty_cache()
+        gc.collect()
+
+        # Update meta.json
+        all_segments = existing_segments + results
+        meta = {
+            "scale": scale,
+            "orig_w": orig_w,
+            "orig_h": orig_h,
+            "settings": {"max_dim": max_dim, "mode": "manual"},
+            "segments": all_segments,
+        }
+        tmp_path = meta_path + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(meta, f)
+        os.replace(tmp_path, meta_path)
 
         return results
 

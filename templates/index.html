@@ -36,6 +36,21 @@
             </div>
         </section>
 
+        <!-- Mode Choice Section (after image upload) -->
+        <section id="mode-choice-section" hidden>
+            <div class="mode-choice-content">
+                <img id="mode-choice-image" class="preview-image" src="" alt="">
+                <h2>Image uploaded</h2>
+                <p class="hint" id="mode-choice-info"></p>
+                <p class="hint">Choose how to segment this image</p>
+                <div class="mode-choice-buttons">
+                    <button id="auto-segment-btn" class="btn btn-primary">Auto Segment All</button>
+                    <button id="manual-annotate-btn" class="btn btn-secondary">Manual Annotate</button>
+                </div>
+                <a href="#" id="mode-choice-reupload" class="btn-link" style="margin-top:1rem;display:inline-block">Upload different image</a>
+            </div>
+        </section>
+
         <!-- PDF Upload Section -->
         <section id="pdf-upload-section" hidden>
             <div id="pdf-drop-zone" class="drop-zone-area">
@@ -85,6 +100,47 @@
                 <div class="spinner"></div>
                 <p id="status-text">Uploading image...</p>
                 <p class="hint" id="status-hint">This may take a few seconds</p>
+            </div>
+        </section>
+
+        <!-- Annotation Section (Manual Mode) -->
+        <section id="annotate-section" hidden>
+            <div class="annotate-header">
+                <button id="annotate-back-btn" class="btn btn-secondary btn-small">Back</button>
+                <div class="annotate-tools">
+                    <button class="annotate-tool active" data-tool="point">Points</button>
+                    <button class="annotate-tool" data-tool="polygon">Polygon</button>
+                    <button class="annotate-tool" data-tool="box">Box</button>
+                </div>
+                <div class="annotate-actions">
+                    <button id="annotate-undo-btn" class="btn btn-secondary btn-small">Undo</button>
+                    <button id="annotate-clear-btn" class="btn btn-secondary btn-small">Clear</button>
+                    <button id="annotate-extract-btn" class="btn btn-primary">Extract Segment</button>
+                </div>
+            </div>
+            <div class="annotate-hint">
+                <span id="annotate-tool-hint">Left-click: foreground point &middot; Right-click: background point</span>
+            </div>
+            <div class="annotate-canvas-wrap">
+                <canvas id="annotate-canvas"></canvas>
+            </div>
+            <div class="annotate-segments">
+                <div class="annotate-segments-header">
+                    <span id="annotate-segment-count">0 segments extracted</span>
+                    <div class="annotate-segments-actions">
+                        <div class="upscale-control">
+                            <label for="annotate-upscale-select">Quality:</label>
+                            <select id="annotate-upscale-select">
+                                <option value="1">1x Original</option>
+                                <option value="2" selected>2x Sticker</option>
+                                <option value="4">4x Print</option>
+                            </select>
+                        </div>
+                        <button id="annotate-download-btn" class="btn btn-primary btn-small" disabled>Download All ZIP</button>
+                        <button id="annotate-done-btn" class="btn btn-primary btn-small" disabled>Done &mdash; View Segments</button>
+                    </div>
+                </div>
+                <div id="annotate-segments-grid" class="annotate-segments-strip"></div>
             </div>
         </section>
 
