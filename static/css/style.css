@@ -552,6 +552,264 @@ main {
     grid-column: 1 / -1;
 }
 
+/* ── Mode Tabs ────────────────────────────────────────────────────── */
+.mode-tabs {
+    display: flex;
+    justify-content: center;
+    gap: 0.25rem;
+    margin-top: 1rem;
+    padding: 0.25rem;
+    background: var(--btn-secondary-bg);
+    border-radius: 10px;
+    display: inline-flex;
+}
+
+header .mode-tabs {
+    display: flex;
+    justify-content: center;
+}
+
+header > .mode-tabs {
+    margin-left: auto;
+    margin-right: auto;
+    width: fit-content;
+}
+
+.mode-tab {
+    padding: 0.45rem 1.2rem;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.mode-tab:hover {
+    color: var(--text);
+}
+
+.mode-tab.active {
+    background: var(--card-bg);
+    color: var(--text);
+    box-shadow: 0 1px 3px var(--shadow);
+}
+
+/* ── PDF Drop Zone ────────────────────────────────────────────────── */
+.drop-zone-area {
+    border: 2px dashed var(--border);
+    border-radius: 16px;
+    padding: 4rem 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: var(--card-bg);
+}
+
+.drop-zone-area:hover,
+.drop-zone-area.drag-over {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+}
+
+.drop-zone-area .drop-zone-content svg {
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+}
+
+/* ── Slides Grid ──────────────────────────────────────────────────── */
+.slides-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 1rem 1.5rem;
+    box-shadow: 0 1px 3px var(--shadow);
+}
+
+.slides-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.slides-info strong {
+    font-size: 1rem;
+}
+
+.slides-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 1.15rem;
+}
+
+.slide-card {
+    background: var(--card-bg);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px var(--shadow);
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.slide-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px var(--shadow-hover);
+}
+
+.slide-card.segmented {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+.slide-preview {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    background: var(--border-light);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.slide-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.slide-placeholder {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.slide-badge {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    padding: 0.25rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    backdrop-filter: blur(4px);
+}
+
+.slide-badge svg {
+    width: 12px;
+    height: 12px;
+}
+
+.slide-badge-action {
+    background: var(--accent);
+}
+
+.slide-info {
+    padding: 0.75rem 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.slide-name {
+    font-size: 0.85rem;
+    font-weight: 500;
+    text-transform: capitalize;
+}
+
+.slide-dims {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+/* ── Browse Runs ──────────────────────────────────────────────────── */
+.browse-loading {
+    text-align: center;
+    padding: 3rem 2rem;
+    color: var(--text-secondary);
+}
+
+.browse-loading .spinner {
+    margin-bottom: 1rem;
+}
+
+.runs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.run-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 1rem 1.5rem;
+    box-shadow: 0 1px 3px var(--shadow);
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    gap: 1rem;
+}
+
+.run-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px var(--shadow-hover);
+}
+
+.run-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.run-name {
+    font-size: 1rem;
+}
+
+.run-meta {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.run-settings {
+    font-size: 0.8rem;
+    color: var(--text-tertiary);
+}
+
+/* ── Back Button ──────────────────────────────────────────────────── */
+.btn-back {
+    flex-shrink: 0;
+}
+
+.btn-back-inline {
+    margin-right: 0.5rem;
+    font-size: 0.85rem;
+}
+
+/* ── Small Button ─────────────────────────────────────────────────── */
+.btn-small {
+    padding: 0.3rem 0.8rem;
+    font-size: 0.8rem;
+}
+
+/* ── Slide Navigation ─────────────────────────────────────────────── */
+.slide-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
 /* ── Responsive ───────────────────────────────────────────────────── */
 @media (max-width: 768px) {
     .results-header {
@@ -575,5 +833,18 @@ main {
 
     .modal-content {
         max-width: 95vw;
+    }
+
+    .slides-grid {
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    }
+
+    .mode-tabs {
+        flex-wrap: wrap;
+    }
+
+    .slides-header {
+        flex-direction: column;
+        align-items: flex-start;
     }
 }

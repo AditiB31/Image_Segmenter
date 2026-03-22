@@ -4,6 +4,8 @@ Image Segmenter Web App
 Upload an image → SAM 2.1 segments all objects → download as transparent PNGs.
 """
 
+import gc
+import glob
 import json
 import os
 import shutil
@@ -25,6 +27,7 @@ from flask import (
 from PIL import Image
 
 from config import cfg
+from pdf_pipeline import pdf_to_images, get_pdf_page_count
 from segmenter import ImageSegmenter
 
 app = Flask(__name__)
@@ -34,6 +37,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "bmp", "tiff"}
+ALLOWED_PDF_EXTENSIONS = {"pdf"}
+DATA_DIR = os.path.join(BASE_DIR, cfg["data_dir"])
+SEGMENTS_DIR = os.path.join(DATA_DIR, cfg["segments_subdir"])
+IMAGES_DIR = os.path.join(DATA_DIR, cfg["images_subdir"])
 SESSION_TTL_SECONDS = cfg["session_ttl"]
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -53,6 +60,15 @@ def _get_image_path(session_id):
     session_upload_dir = os.path.join(UPLOAD_DIR, session_id)
     files = os.listdir(session_upload_dir) if os.path.isdir(session_upload_dir) else []
     return os.path.join(session_upload_dir, files[0]) if files else None
+
+
+def _load_pdf_session(session_id):
+    """Load PDF session metadata, or None if not a PDF session."""
+    path = os.path.join(OUTPUT_DIR, session_id, "pdf_session.json")
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return None
 
 
 def cleanup_old_sessions():
@@ -142,6 +158,8 @@ def segment(session_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+    gc.collect()
+
     return jsonify(
         {
             "session_id": session_id,
@@ -153,9 +171,13 @@ def segment(session_id):
 
 @app.route("/segment-image/<session_id>/<filename>")
 def segment_image(session_id, filename):
-    """Serve thumbnail for gallery preview (small, already on disk)."""
+    """Serve thumbnail for gallery preview. Supports ?slide=slide_001 for PDF sessions."""
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
-    thumbs_dir = os.path.join(session_output_dir, "thumbs")
+    slide = request.args.get("slide")
+    if slide:
+        thumbs_dir = os.path.join(session_output_dir, slide, "thumbs")
+    else:
+        thumbs_dir = os.path.join(session_output_dir, "thumbs")
     if not os.path.isdir(thumbs_dir):
         return jsonify({"error": "Session not found"}), 404
 
@@ -164,7 +186,7 @@ def segment_image(session_id, filename):
 
 @app.route("/download/<session_id>/<filename>")
 def download(session_id, filename):
-    """Render full-res segment on demand and serve it."""
+    """Render full-res segment on demand and serve it. Supports ?slide= for PDF sessions."""
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
     if not os.path.isdir(session_output_dir):
         return jsonify({"error": "Session not found"}), 404
@@ -174,18 +196,29 @@ def download(session_id, filename):
     except (IndexError, ValueError):
         return jsonify({"error": "Invalid filename"}), 400
 
-    image_path = _get_image_path(session_id)
-    if image_path is None:
+    slide = request.args.get("slide")
+    if slide:
+        # PDF session: image is from cached slide images
+        pdf_session = _load_pdf_session(session_id)
+        if pdf_session is None:
+            return jsonify({"error": "PDF session not found"}), 404
+        image_path = os.path.join(pdf_session["images_dir"], f"{slide}.png")
+        seg_output_dir = os.path.join(session_output_dir, slide)
+    else:
+        image_path = _get_image_path(session_id)
+        seg_output_dir = session_output_dir
+
+    if image_path is None or not os.path.exists(image_path):
         return jsonify({"error": "Original image not found"}), 404
 
     upscale = max(1, int(request.args.get("upscale", cfg["upscale"])))
-    render_dir = os.path.join(session_output_dir, f"render_{upscale}x")
+    render_dir = os.path.join(seg_output_dir, f"render_{upscale}x")
     out_path = os.path.join(render_dir, filename)
 
     if not os.path.exists(out_path):
         os.makedirs(render_dir, exist_ok=True)
         result = segmenter.render_segment(
-            image_path, session_output_dir, idx, upscale=upscale, out_path=out_path
+            image_path, seg_output_dir, idx, upscale=upscale, out_path=out_path
         )
         if result is None:
             return jsonify({"error": "Segment not found"}), 404
@@ -195,16 +228,29 @@ def download(session_id, filename):
 
 @app.route("/download-all/<session_id>", methods=["GET", "POST"])
 def download_all(session_id):
-    """Render selected (or all) segments at 2× resolution and ZIP them."""
+    """Render selected (or all) segments at requested upscale and ZIP them."""
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
     if not os.path.isdir(session_output_dir):
         return jsonify({"error": "Session not found"}), 404
 
-    image_path = _get_image_path(session_id)
-    if image_path is None:
+    data = request.get_json(silent=True) or {}
+    slide = data.get("slide")
+
+    # Resolve image path and segment output dir based on session type
+    if slide:
+        pdf_session = _load_pdf_session(session_id)
+        if pdf_session is None:
+            return jsonify({"error": "PDF session not found"}), 404
+        image_path = os.path.join(pdf_session["images_dir"], f"{slide}.png")
+        seg_output_dir = os.path.join(session_output_dir, slide)
+    else:
+        image_path = _get_image_path(session_id)
+        seg_output_dir = session_output_dir
+
+    if image_path is None or not os.path.exists(image_path):
         return jsonify({"error": "Original image not found"}), 404
 
-    meta_path = os.path.join(session_output_dir, "masks", "meta.json")
+    meta_path = os.path.join(seg_output_dir, "masks", "meta.json")
     if not os.path.exists(meta_path):
         return jsonify({"error": "No segments found"}), 404
 
@@ -212,7 +258,6 @@ def download_all(session_id):
         meta = json.load(f)
 
     all_indices = [s["index"] for s in meta["segments"]]
-    data = request.get_json(silent=True) or {}
     indices = data.get("indices", all_indices)
     upscale = max(1, int(data.get("upscale", cfg["upscale"])))
 
@@ -220,7 +265,7 @@ def download_all(session_id):
         return jsonify({"error": "No segments selected"}), 400
 
     # Render upscaled segments in parallel using ThreadPoolExecutor
-    render_dir = os.path.join(session_output_dir, f"render_{upscale}x")
+    render_dir = os.path.join(seg_output_dir, f"render_{upscale}x")
     os.makedirs(render_dir, exist_ok=True)
 
     # Load original image once; share across threads (numpy reads are thread-safe)
@@ -233,7 +278,7 @@ def download_all(session_id):
         if not os.path.exists(out_path):
             result = segmenter.render_segment(
                 image_path,
-                session_output_dir,
+                seg_output_dir,
                 idx,
                 meta=meta,
                 upscale=upscale,
@@ -245,7 +290,7 @@ def download_all(session_id):
         return (out_path, filename)
 
     rendered = []
-    workers = min(os.cpu_count() or 4, 8)
+    workers = min(os.cpu_count() or 4, cfg["render_workers"])
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_render_one, idx): idx for idx in indices}
         for future in as_completed(futures):
@@ -257,13 +302,14 @@ def download_all(session_id):
         shutil.rmtree(render_dir, ignore_errors=True)
         return jsonify({"error": "No segments could be rendered"}), 404
 
-    zip_path = os.path.join(session_output_dir, f"segments_{upscale}x.zip")
+    zip_path = os.path.join(seg_output_dir, f"segments_{upscale}x.zip")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
         for path, fname in rendered:
             zf.write(path, fname)
 
-    # Free disk space: remove individual renders, keep only the zip
+    # Free disk space and memory
     shutil.rmtree(render_dir, ignore_errors=True)
+    gc.collect()
 
     return send_file(
         zip_path,
@@ -271,6 +317,346 @@ def download_all(session_id):
         as_attachment=True,
         download_name="stickers.zip",
     )
+
+
+# ── PDF Upload Routes ──────────────────────────────────────────────────
+
+
+@app.route("/upload-pdf", methods=["POST"])
+def upload_pdf():
+    """Upload PDF, convert to cached slide images, return slide list."""
+    cleanup_old_sessions()
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files["file"]
+    if (
+        not file.filename
+        or "." not in file.filename
+        or file.filename.rsplit(".", 1)[1].lower() not in ALLOWED_PDF_EXTENSIONS
+    ):
+        return jsonify({"error": "Please upload a PDF file"}), 400
+
+    session_id = uuid.uuid4().hex[:12]
+    pdf_name = os.path.splitext(file.filename)[0]
+
+    # Save PDF to uploads
+    session_upload_dir = os.path.join(UPLOAD_DIR, session_id)
+    os.makedirs(session_upload_dir, exist_ok=True)
+    pdf_path = os.path.join(session_upload_dir, "original.pdf")
+    file.save(pdf_path)
+
+    # Convert to cached slide images
+    dpi = cfg["pdf_dpi"]
+    img_fmt = cfg["pdf_image_format"]
+    images_dir = os.path.join(IMAGES_DIR, pdf_name)
+
+    total_pages = get_pdf_page_count(pdf_path)
+
+    # Check cache
+    cached = False
+    info_path = os.path.join(images_dir, "conversion_info.json")
+    if os.path.exists(info_path):
+        with open(info_path) as f:
+            info = json.load(f)
+        if info.get("dpi") == dpi:
+            existing = sorted(glob.glob(
+                os.path.join(images_dir, f"slide_*.{img_fmt}")
+            ))
+            if existing:
+                cached = True
+
+    if not cached:
+        os.makedirs(images_dir, exist_ok=True)
+        pdf_to_images(pdf_path, images_dir, dpi=dpi, fmt=img_fmt)
+        conversion_info = {
+            "dpi": dpi,
+            "page_count": total_pages,
+            "format": img_fmt,
+            "converted_at": __import__("datetime").datetime.now().isoformat(),
+            "pdf_name": pdf_name,
+        }
+        with open(os.path.join(images_dir, "conversion_info.json"), "w") as f:
+            json.dump(conversion_info, f, indent=2)
+
+    # Build slide list with dimensions
+    slide_files = sorted(glob.glob(os.path.join(images_dir, f"slide_*.{img_fmt}")))
+    slides = []
+    session_output_dir = os.path.join(OUTPUT_DIR, session_id)
+    os.makedirs(session_output_dir, exist_ok=True)
+    thumbs_dir = os.path.join(session_output_dir, "slide_thumbs")
+    os.makedirs(thumbs_dir, exist_ok=True)
+
+    for slide_path in slide_files:
+        fname = os.path.basename(slide_path)
+        name = os.path.splitext(fname)[0]
+        with Image.open(slide_path) as img:
+            w, h = img.size
+            # Generate slide thumbnail (max 400px)
+            thumb_scale = min(400 / w, 400 / h, 1.0)
+            if thumb_scale < 1.0:
+                thumb = img.resize(
+                    (max(1, int(w * thumb_scale)), max(1, int(h * thumb_scale))),
+                    Image.LANCZOS,
+                )
+            else:
+                thumb = img.copy()
+            thumb.save(os.path.join(thumbs_dir, fname))
+            thumb.close()
+        slides.append({"name": name, "filename": fname, "width": w, "height": h})
+
+    # Save PDF session metadata
+    pdf_session = {
+        "pdf_name": pdf_name,
+        "images_dir": images_dir,
+        "total_pages": total_pages,
+        "slides": slides,
+        "cached": cached,
+    }
+    with open(os.path.join(session_output_dir, "pdf_session.json"), "w") as f:
+        json.dump(pdf_session, f, indent=2)
+
+    gc.collect()
+
+    return jsonify({
+        "session_id": session_id,
+        "pdf_name": pdf_name,
+        "total_pages": total_pages,
+        "slides": slides,
+        "cached": cached,
+    })
+
+
+@app.route("/slide-image/<session_id>/<filename>")
+def slide_image(session_id, filename):
+    """Serve slide thumbnail for the PDF slide browser."""
+    thumbs_dir = os.path.join(OUTPUT_DIR, session_id, "slide_thumbs")
+    if not os.path.isdir(thumbs_dir):
+        return jsonify({"error": "Session not found"}), 404
+    return send_from_directory(thumbs_dir, filename, mimetype="image/png")
+
+
+@app.route("/segment-slide/<session_id>/<int:slide_index>", methods=["POST"])
+def segment_slide(session_id, slide_index):
+    """Segment a single slide from a PDF upload session."""
+    pdf_session = _load_pdf_session(session_id)
+    if pdf_session is None:
+        return jsonify({"error": "PDF session not found"}), 404
+
+    if slide_index < 0 or slide_index >= len(pdf_session["slides"]):
+        return jsonify({"error": "Slide index out of range"}), 400
+
+    slide_info = pdf_session["slides"][slide_index]
+    slide_name = slide_info["name"]
+    slide_path = os.path.join(pdf_session["images_dir"], slide_info["filename"])
+
+    if not os.path.exists(slide_path):
+        return jsonify({"error": "Slide image not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    min_area = data.get("min_area", cfg["min_area"])
+    max_dim = data.get("max_dim", cfg["max_dim"])
+
+    seg_output_dir = os.path.join(OUTPUT_DIR, session_id, slide_name)
+
+    try:
+        segments = segmenter.segment(
+            slide_path, seg_output_dir, min_area=min_area, max_dim=max_dim
+        )
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower() or "mps" in str(e).lower():
+            return jsonify({
+                "error": "Out of memory. Try a smaller max_dim.",
+            }), 500
+        raise
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    gc.collect()
+
+    return jsonify({
+        "session_id": session_id,
+        "slide_name": slide_name,
+        "slide_index": slide_index,
+        "segment_count": len(segments),
+        "segments": segments,
+    })
+
+
+# ── Browse Existing Runs ───────────────────────────────────────────────
+
+
+@app.route("/browse/runs")
+def browse_runs():
+    """List available pipeline runs from data/segments/."""
+    if not os.path.isdir(SEGMENTS_DIR):
+        return jsonify({"runs": []})
+
+    runs = []
+    for name in sorted(os.listdir(SEGMENTS_DIR), reverse=True):
+        run_path = os.path.join(SEGMENTS_DIR, name)
+        if not os.path.isdir(run_path):
+            continue
+
+        # New format: has run_info.json
+        info_path = os.path.join(run_path, "run_info.json")
+        if os.path.exists(info_path):
+            with open(info_path) as f:
+                info = json.load(f)
+            runs.append({
+                "name": name,
+                "pdf_name": info.get("pdf", name),
+                "timestamp": info.get("timestamp", ""),
+                "total_segments": info.get("total_segments", 0),
+                "slide_count": len(info.get("slides", [])),
+                "settings": info.get("settings", {}),
+            })
+        else:
+            # Legacy format: single-slide segment directory with masks/ inside
+            if os.path.isdir(os.path.join(run_path, "masks")):
+                meta_path = os.path.join(run_path, "masks", "meta.json")
+                seg_count = 0
+                if os.path.exists(meta_path):
+                    with open(meta_path) as f:
+                        meta = json.load(f)
+                    seg_count = len(meta.get("segments", []))
+                runs.append({
+                    "name": name,
+                    "pdf_name": name.rsplit("_slide_", 1)[0] if "_slide_" in name else name,
+                    "timestamp": "",
+                    "total_segments": seg_count,
+                    "slide_count": 1,
+                    "settings": {},
+                    "legacy": True,
+                })
+
+    return jsonify({"runs": runs})
+
+
+@app.route("/browse/run/<run_name>")
+def browse_run(run_name):
+    """List slides in a pipeline run with segment counts."""
+    run_path = os.path.join(SEGMENTS_DIR, run_name)
+    if not os.path.isdir(run_path):
+        return jsonify({"error": "Run not found"}), 404
+
+    info_path = os.path.join(run_path, "run_info.json")
+    slides = []
+
+    if os.path.exists(info_path):
+        # New format: subdirectories per slide
+        with open(info_path) as f:
+            info = json.load(f)
+        for entry in sorted(os.listdir(run_path)):
+            slide_dir = os.path.join(run_path, entry)
+            if not os.path.isdir(slide_dir) or not entry.startswith("slide_"):
+                continue
+            meta_path = os.path.join(slide_dir, "masks", "meta.json")
+            seg_count = 0
+            if os.path.exists(meta_path):
+                with open(meta_path) as f:
+                    meta = json.load(f)
+                seg_count = len(meta.get("segments", []))
+            has_rendered = os.path.isdir(os.path.join(slide_dir, "rendered"))
+            slides.append({
+                "name": entry,
+                "segment_count": seg_count,
+                "has_rendered": has_rendered,
+            })
+        # Try to find slide image dimensions from cached images
+        images_dir = info.get("images_dir", "")
+        return jsonify({
+            "run_name": run_name,
+            "pdf_name": info.get("pdf", run_name),
+            "timestamp": info.get("timestamp", ""),
+            "settings": info.get("settings", {}),
+            "slides": slides,
+            "images_dir": images_dir,
+        })
+    else:
+        # Legacy format: single slide
+        meta_path = os.path.join(run_path, "masks", "meta.json")
+        seg_count = 0
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                meta = json.load(f)
+            seg_count = len(meta.get("segments", []))
+        slides.append({
+            "name": run_name,
+            "segment_count": seg_count,
+            "has_rendered": os.path.isdir(os.path.join(run_path, "rendered")),
+            "legacy": True,
+        })
+        return jsonify({
+            "run_name": run_name,
+            "pdf_name": run_name,
+            "slides": slides,
+        })
+
+
+@app.route("/browse/run/<run_name>/<slide_name>")
+def browse_slide(run_name, slide_name):
+    """Return segment metadata for a slide in a pipeline run."""
+    run_path = os.path.join(SEGMENTS_DIR, run_name)
+
+    # New format: slide is a subdirectory
+    slide_dir = os.path.join(run_path, slide_name)
+    if os.path.isdir(slide_dir):
+        meta_path = os.path.join(slide_dir, "masks", "meta.json")
+    else:
+        # Legacy format: run_name IS the slide directory
+        slide_dir = run_path
+        meta_path = os.path.join(run_path, "masks", "meta.json")
+
+    if not os.path.exists(meta_path):
+        return jsonify({"error": "Segment data not found"}), 404
+
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    return jsonify({
+        "run_name": run_name,
+        "slide_name": slide_name,
+        "segments": meta.get("segments", []),
+        "has_rendered": os.path.isdir(os.path.join(slide_dir, "rendered")),
+    })
+
+
+@app.route("/browse/thumb/<run_name>/<slide_name>/<filename>")
+def browse_thumb(run_name, slide_name, filename):
+    """Serve segment thumbnail from a pipeline run."""
+    run_path = os.path.join(SEGMENTS_DIR, run_name)
+
+    # New format
+    thumbs_dir = os.path.join(run_path, slide_name, "thumbs")
+    if not os.path.isdir(thumbs_dir):
+        # Legacy: thumbs directly in run directory
+        thumbs_dir = os.path.join(run_path, "thumbs")
+    if not os.path.isdir(thumbs_dir):
+        return jsonify({"error": "Not found"}), 404
+
+    return send_from_directory(thumbs_dir, filename, mimetype="image/png")
+
+
+@app.route("/browse/download/<run_name>/<slide_name>/<filename>")
+def browse_download(run_name, slide_name, filename):
+    """Serve rendered segment PNG from a pipeline run."""
+    run_path = os.path.join(SEGMENTS_DIR, run_name)
+
+    # New format
+    rendered_dir = os.path.join(run_path, slide_name, "rendered")
+    if not os.path.isdir(rendered_dir):
+        # Legacy
+        rendered_dir = os.path.join(run_path, "rendered")
+    if not os.path.isdir(rendered_dir):
+        return jsonify({"error": "Rendered segments not found"}), 404
+
+    filepath = os.path.join(rendered_dir, filename)
+    if not os.path.exists(filepath):
+        return jsonify({"error": "File not found"}), 404
+
+    return send_file(filepath, as_attachment=True)
 
 
 if __name__ == "__main__":

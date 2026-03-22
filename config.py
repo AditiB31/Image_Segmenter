@@ -34,6 +34,7 @@ _DEFAULTS = {
     # PDF pipeline
     "pdf_dpi": 200,
     "pdf_image_format": "png",
+    "render_workers": 4,
     # Paths
     "data_dir": "data",
     "pdf_subdir": "pdfs",

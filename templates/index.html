@@ -10,11 +10,16 @@
 <body>
     <header>
         <h1>Image Segmenter</h1>
-        <p class="subtitle">Upload an image to extract all objects as transparent PNGs</p>
+        <p class="subtitle">Extract all objects as transparent PNGs using SAM 2.1</p>
+        <nav class="mode-tabs">
+            <button class="mode-tab active" data-mode="image">Upload Image</button>
+            <button class="mode-tab" data-mode="pdf">Upload PDF</button>
+            <button class="mode-tab" data-mode="browse">Browse Runs</button>
+        </nav>
     </header>
 
     <main>
-        <!-- Upload Section -->
+        <!-- Image Upload Section -->
         <section id="upload-section">
             <div id="drop-zone">
                 <div class="drop-zone-content">
@@ -31,6 +36,48 @@
             </div>
         </section>
 
+        <!-- PDF Upload Section -->
+        <section id="pdf-upload-section" hidden>
+            <div id="pdf-drop-zone" class="drop-zone-area">
+                <div class="drop-zone-content">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                    <p>Drag & drop a PDF here</p>
+                    <p class="hint">or click to browse</p>
+                    <p class="formats">PDF presentations — up to 50 MB</p>
+                </div>
+                <input type="file" id="pdf-file-input" accept=".pdf" hidden>
+            </div>
+        </section>
+
+        <!-- Browse Runs Section -->
+        <section id="browse-section" hidden>
+            <div id="browse-loading" class="browse-loading">
+                <div class="spinner"></div>
+                <p>Loading runs...</p>
+            </div>
+            <div id="browse-empty" class="empty-state" hidden>
+                <p>No pipeline runs found. Run the PDF pipeline CLI first, or upload a PDF above.</p>
+            </div>
+            <div id="runs-list" class="runs-list" hidden></div>
+        </section>
+
+        <!-- Slides Browser Section (after PDF upload or browsing a run) -->
+        <section id="slides-section" hidden>
+            <div class="slides-header">
+                <button id="back-to-source-btn" class="btn btn-secondary btn-back">Back</button>
+                <div class="slides-info">
+                    <strong id="slides-title"></strong>
+                    <span id="slides-subtitle" class="hint"></span>
+                </div>
+            </div>
+            <div id="slides-grid" class="slides-grid"></div>
+        </section>
+
         <!-- Processing Section -->
         <section id="processing-section" hidden>
             <div class="processing-content">
@@ -45,11 +92,17 @@
         <section id="results-section" hidden>
             <div class="results-header">
                 <div class="results-info">
+                    <button id="back-to-slides-btn" class="btn-link btn-back-inline" hidden>Back to slides</button>
                     <span id="segment-count"></span>
                     <span id="visible-count"></span>
                     <span id="selected-count" class="selected-count-badge"></span>
                 </div>
                 <div class="results-controls">
+                    <div class="slide-nav" id="slide-nav" hidden>
+                        <button id="prev-slide-btn" class="btn btn-secondary btn-small" disabled>Prev</button>
+                        <span id="slide-nav-label"></span>
+                        <button id="next-slide-btn" class="btn btn-secondary btn-small" disabled>Next</button>
+                    </div>
                     <div class="selection-controls">
                         <button id="select-all-btn" class="btn-link">Select all</button>
                         <button id="clear-selection-btn" class="btn-link">Clear</button>
@@ -70,9 +123,9 @@
                     <div class="upscale-control">
                         <label for="upscale-select">Quality:</label>
                         <select id="upscale-select">
-                            <option value="1">1× Original</option>
-                            <option value="2" selected>2× Sticker</option>
-                            <option value="4">4× Print</option>
+                            <option value="1">1x Original</option>
+                            <option value="2" selected>2x Sticker</option>
+                            <option value="4">4x Print</option>
                         </select>
                     </div>
                     <button id="download-btn" class="btn btn-primary" disabled>Download All as ZIP</button>

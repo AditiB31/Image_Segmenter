@@ -97,6 +97,11 @@ pdf_dpi: 200
 # Options: png (lossless, larger), jpg (lossy, smaller).
 pdf_image_format: png
 
+# Maximum concurrent workers for rendering segments.
+# Lower values reduce peak memory usage at the cost of speed.
+# Range: 1–8. 4 is a good balance for Apple Silicon with 32GB RAM.
+render_workers: 4
+
 # ─── Default Paths (for PDFs placed in data/pdfs/) ─────────────────────────
 # When a PDF lives outside data/pdfs/, the pipeline auto-creates
 # slide_images/ and slide_image_segments/ next to the PDF instead.
