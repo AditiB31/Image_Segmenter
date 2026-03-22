@@ -415,8 +415,10 @@ def annotate(session_id):
 
     data = request.get_json(silent=True) or {}
     prompts = data.get("prompts", [])
-    if not prompts:
+    if not isinstance(prompts, list) or not prompts:
         return jsonify({"error": "No prompts provided"}), 400
+    if len(prompts) > 50:
+        return jsonify({"error": "Too many prompts (max 50)"}), 400
 
     max_dim = data.get("max_dim", cfg["max_dim"])
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
@@ -430,9 +432,9 @@ def annotate(session_id):
             return jsonify(
                 {"error": "Out of memory. Try a smaller image."}
             ), 500
-        raise
+        return jsonify({"error": "Segmentation failed"}), 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Segmentation failed"}), 500
 
     _cleanup_memory()
 

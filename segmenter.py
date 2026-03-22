@@ -551,7 +551,7 @@ class ImageSegmenter:
             # Save compact mask crop
             np.savez_compressed(
                 os.path.join(masks_dir, f"{idx}.npz"),
-                mask=np.packbits(mask_crop.astype(np.uint8)),
+                mask=np.packbits(mask_crop),
                 shape=np.array(mask_crop.shape, dtype=np.int32),
             )
 

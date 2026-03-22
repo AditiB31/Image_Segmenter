@@ -5,6 +5,7 @@ A Flask web app and CLI pipeline that uses Meta's [SAM 2.1](https://github.com/f
 ## Features
 
 - Drag-and-drop image upload via web UI
+- **Manual annotation** — click points, draw polygons, or drag boxes to extract specific objects with SAM 2.1 prompts
 - **PDF upload** — upload a presentation PDF in the browser, browse slides, and segment individually
 - **PDF pipeline** (CLI) — batch process a PDF to extract all visual assets from every slide
 - **Browse runs** — view and download segments from previous pipeline runs in the web UI
@@ -56,7 +57,9 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000) in your browser. The model l
 
 The web UI has three modes accessible via tabs:
 
-1. **Upload Image** — Upload a single image (JPG, PNG, WebP, BMP, TIFF). SAM 2.1 segments all objects and displays them in a gallery. Download individual PNGs or all as a ZIP.
+1. **Upload Image** — Upload a single image (JPG, PNG, WebP, BMP, TIFF). Choose between:
+   - **Auto Segment All** — SAM 2.1 segments all objects and displays them in a gallery.
+   - **Manual Annotate** — Click points, draw polygons, or drag bounding boxes to extract specific objects. See each segment immediately as it's extracted. Download individual PNGs or all as a ZIP at your chosen quality level (1x–4x).
 
 2. **Upload PDF** — Upload a presentation PDF. Slides are converted to images (cached for future use). Click any slide to segment it on demand. Navigate between slides with prev/next controls.
 

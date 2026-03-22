@@ -951,18 +951,26 @@ function redrawAnnotateCanvas() {
 
     // Draw points
     currentPrompt.points.forEach((pt) => {
+        const px = pt.x * s, py = pt.y * s;
+        // Outer glow for visibility on any background
         ctx.beginPath();
-        ctx.arc(pt.x * s, pt.y * s, 7, 0, Math.PI * 2);
-        ctx.fillStyle = pt.label === 1 ? "rgba(0, 200, 0, 0.85)" : "rgba(255, 50, 50, 0.85)";
+        ctx.arc(px, py, 10, 0, Math.PI * 2);
+        ctx.fillStyle = pt.label === 1 ? "rgba(0, 200, 0, 0.25)" : "rgba(255, 50, 50, 0.25)";
+        ctx.fill();
+        // Main circle
+        ctx.beginPath();
+        ctx.arc(px, py, 7, 0, Math.PI * 2);
+        ctx.fillStyle = pt.label === 1 ? "rgba(0, 200, 0, 0.9)" : "rgba(255, 50, 50, 0.9)";
         ctx.fill();
         ctx.strokeStyle = "#fff";
         ctx.lineWidth = 2;
         ctx.stroke();
+        // Label
         ctx.fillStyle = "#fff";
-        ctx.font = "bold 11px sans-serif";
+        ctx.font = "bold 12px sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(pt.label === 1 ? "+" : "\u2212", pt.x * s, pt.y * s + 1);
+        ctx.fillText(pt.label === 1 ? "+" : "\u2212", px, py + 1);
     });
 
     // Draw contour
@@ -974,20 +982,26 @@ function redrawAnnotateCanvas() {
         }
         if (currentPrompt.contourClosed) {
             ctx.closePath();
-            ctx.fillStyle = "rgba(0, 113, 227, 0.1)";
+            ctx.fillStyle = "rgba(0, 113, 227, 0.15)";
             ctx.fill();
         }
+        // Outer stroke for visibility on dark backgrounds
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+        ctx.lineWidth = 4;
+        ctx.stroke();
+        // Inner coloured stroke
         ctx.strokeStyle = "rgba(0, 113, 227, 0.9)";
         ctx.lineWidth = 2;
         ctx.stroke();
 
         currentPrompt.contour.forEach((pt, i) => {
+            const px = pt.x * s, py = pt.y * s;
             ctx.beginPath();
-            ctx.arc(pt.x * s, pt.y * s, i === 0 ? 6 : 4, 0, Math.PI * 2);
-            ctx.fillStyle = i === 0 ? "rgba(0, 113, 227, 0.9)" : "rgba(0, 113, 227, 0.6)";
+            ctx.arc(px, py, i === 0 ? 7 : 5, 0, Math.PI * 2);
+            ctx.fillStyle = i === 0 ? "rgba(0, 113, 227, 0.95)" : "rgba(0, 113, 227, 0.7)";
             ctx.fill();
             ctx.strokeStyle = "#fff";
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = 2;
             ctx.stroke();
         });
     }
@@ -995,13 +1009,19 @@ function redrawAnnotateCanvas() {
     // Draw box
     if (currentPrompt.box) {
         const b = currentPrompt.box;
+        const bx = b.x1 * s, by = b.y1 * s, bw = (b.x2 - b.x1) * s, bh = (b.y2 - b.y1) * s;
+        ctx.fillStyle = "rgba(0, 113, 227, 0.1)";
+        ctx.fillRect(bx, by, bw, bh);
+        // Outer white stroke for visibility
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+        ctx.lineWidth = 4;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(bx, by, bw, bh);
+        // Inner coloured stroke
         ctx.strokeStyle = "rgba(0, 113, 227, 0.9)";
         ctx.lineWidth = 2;
-        ctx.setLineDash([6, 4]);
-        ctx.strokeRect(b.x1 * s, b.y1 * s, (b.x2 - b.x1) * s, (b.y2 - b.y1) * s);
+        ctx.strokeRect(bx, by, bw, bh);
         ctx.setLineDash([]);
-        ctx.fillStyle = "rgba(0, 113, 227, 0.08)";
-        ctx.fillRect(b.x1 * s, b.y1 * s, (b.x2 - b.x1) * s, (b.y2 - b.y1) * s);
     }
 }
 
@@ -1021,7 +1041,7 @@ annotateCanvas.addEventListener("click", (e) => {
         if (currentPrompt.contour.length >= 3) {
             const first = currentPrompt.contour[0];
             const displayDist = Math.hypot((first.x - origX) * annotateScale, (first.y - origY) * annotateScale);
-            if (displayDist < 14) {
+            if (displayDist < 20) {
                 currentPrompt.contourClosed = true;
                 redrawAnnotateCanvas();
                 return;
