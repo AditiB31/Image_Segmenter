@@ -5,15 +5,18 @@ A Flask web app and CLI pipeline that uses Meta's [SAM 2.1](https://github.com/f
 ## Features
 
 - Drag-and-drop image upload via web UI
+- **Folder upload** — select a folder of images to browse and annotate them in a gallery view, similar to PDF slides
 - **Manual annotation** — click points, draw polygons, or drag boxes to extract specific objects with SAM 2.1 prompts
 - **PDF upload** — upload a presentation PDF in the browser, browse slides, and segment individually
 - **PDF pipeline** (CLI) — batch process a PDF to extract all visual assets from every slide
 - **Browse runs** — view and download segments from previous pipeline runs in the web UI
+- **Auto-open file picker** — clicking the Upload Image or Upload PDF tab immediately opens the file picker
 - Automatic segmentation of all objects using SAM 2.1
 - Tight cropping of segments with configurable padding to minimise file size
 - Preview all extracted segments in the browser
 - Download individual segments or all as a ZIP
 - Configurable upscaling (1x-4x) for sticker/print quality
+- **Optimised edge handling** — tuned feathering, contour smoothing, and anti-aliasing for clean segment edges
 - Apple Silicon (MPS) acceleration with CPU fallback
 - **Smart caching** — slide images are converted once and reused across pipeline runs
 - Session-based web UI — multiple users can run concurrently, sessions auto-cleanup after 1 hour
@@ -57,9 +60,9 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000) in your browser. The model l
 
 The web UI has three modes accessible via tabs:
 
-1. **Upload Image** — Upload a single image (JPG, PNG, WebP, BMP, TIFF). Opens directly in the annotation canvas where you click points, draw polygons, or drag bounding boxes to extract specific objects. Each segment appears immediately in a gallery strip with per-segment removal, quality selector (1x–4x), and ZIP download. An "Auto Segment All" button is available in the toolbar for automatic segmentation.
+1. **Upload Image** — Upload a single image (JPG, PNG, WebP, BMP, TIFF) or select a folder of images. Clicking the tab auto-opens the file picker. Single images open directly in the annotation canvas. Multiple images or a folder display a gallery grid (like PDF slides) where you click any image to annotate it. Tools include points, polygons, and bounding boxes. Each segment appears immediately in a gallery strip with per-segment removal, quality selector (1x-4x), and ZIP download. An "Auto Segment All" button is available in the toolbar for automatic segmentation.
 
-2. **Upload PDF** — Upload a presentation PDF. Slides are converted to images (cached for future use). Click any slide to open it in the annotation canvas for manual segment extraction. Navigate between slides with prev/next controls. The typical workflow is: click slide → annotate segments → download → back to slides → next slide.
+2. **Upload PDF** — Upload a presentation PDF. Clicking the tab auto-opens the file picker. Slides are converted to images (cached for future use). Click any slide to open it in the annotation canvas for manual segment extraction. Navigate between slides with prev/next controls. The typical workflow is: click slide → annotate segments → download → back to slides → next slide.
 
 3. **Browse Runs** — View results from previous CLI pipeline runs. Select a run, then a slide, to see its extracted segments. Download rendered PNGs directly.
 

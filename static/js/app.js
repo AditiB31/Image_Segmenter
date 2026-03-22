@@ -1,6 +1,10 @@
 // ── DOM Elements ──────────────────────────────────────────────────────
 const dropZone = document.getElementById("drop-zone");
 const fileInput = document.getElementById("file-input");
+const fileInputMultiple = document.getElementById("file-input-multiple");
+const folderInput = document.getElementById("folder-input");
+const uploadFileBtn = document.getElementById("upload-file-btn");
+const uploadFolderBtn = document.getElementById("upload-folder-btn");
 const pdfDropZone = document.getElementById("pdf-drop-zone");
 const pdfFileInput = document.getElementById("pdf-file-input");
 const uploadSection = document.getElementById("upload-section");
@@ -79,6 +83,10 @@ let currentRunName = null;
 let currentRunSlides = [];
 let browseImagesDir = null;
 
+// Multi-image state (folder upload)
+let currentImageList = [];     // [{session_id, filename, width, height, name}]
+let currentImageIndex = null;
+
 // Annotation state
 let annotateImage = null;
 let annotateScale = 1;
@@ -153,11 +161,11 @@ function getDownloadUrl(seg) {
 modeTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
         const mode = tab.dataset.mode;
-        switchMode(mode);
+        switchMode(mode, true);
     });
 });
 
-function switchMode(mode) {
+function switchMode(mode, autoOpen = false) {
     currentMode = mode;
     modeTabs.forEach((t) => t.classList.toggle("active", t.dataset.mode === mode));
 
@@ -166,8 +174,10 @@ function switchMode(mode) {
 
     if (mode === "image") {
         showSection("upload");
+        if (autoOpen) setTimeout(() => fileInput.click(), 100);
     } else if (mode === "pdf") {
         showSection("pdf-upload");
+        if (autoOpen) setTimeout(() => pdfFileInput.click(), 100);
     } else if (mode === "browse") {
         showSection("browse");
         loadRuns();
@@ -190,6 +200,8 @@ function resetState() {
     currentSourceName = "";
     extractedSegments = [];
     currentUploadData = null;
+    currentImageList = [];
+    currentImageIndex = null;
     annotateImage = null;
     annotateSlideIndex = null;
     currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
@@ -203,17 +215,48 @@ function resetState() {
 }
 
 // ── Image Drag & Drop ─────────────────────────────────────────────────
-dropZone.addEventListener("click", () => fileInput.click());
+function isImageFile(file) {
+    const validTypes = ["image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff"];
+    return validTypes.includes(file.type) || file.name.match(/\.(jpe?g|png|webp|bmp|tiff?)$/i);
+}
+
+dropZone.addEventListener("click", (e) => {
+    // Don't trigger file picker if a button inside was clicked
+    if (e.target.closest(".upload-buttons")) return;
+    fileInput.click();
+});
+uploadFileBtn.addEventListener("click", (e) => { e.stopPropagation(); fileInputMultiple.click(); });
+uploadFolderBtn.addEventListener("click", (e) => { e.stopPropagation(); folderInput.click(); });
 dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
 dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
 dropZone.addEventListener("drop", (e) => {
     e.preventDefault();
     dropZone.classList.remove("drag-over");
-    const file = e.dataTransfer.files[0];
-    if (file) handleImageFile(file);
+    const files = [...e.dataTransfer.files].filter(isImageFile);
+    if (files.length > 1) {
+        handleImageFiles(files);
+    } else if (files.length === 1) {
+        handleImageFile(files[0]);
+    }
 });
 fileInput.addEventListener("change", () => {
     if (fileInput.files[0]) handleImageFile(fileInput.files[0]);
+});
+fileInputMultiple.addEventListener("change", () => {
+    const files = [...fileInputMultiple.files].filter(isImageFile);
+    if (files.length > 1) {
+        handleImageFiles(files);
+    } else if (files.length === 1) {
+        handleImageFile(files[0]);
+    }
+});
+folderInput.addEventListener("change", () => {
+    const files = [...folderInput.files].filter(isImageFile);
+    if (files.length > 0) {
+        handleImageFiles(files);
+    } else {
+        showToast("No image files found in the selected folder.");
+    }
 });
 
 // ── PDF Drag & Drop ───────────────────────────────────────────────────
@@ -241,6 +284,10 @@ startOverBtn.addEventListener("click", () => {
         loadRuns();
         return;
     }
+    if (currentMode === "image" && currentImageList.length > 1) {
+        renderImageGallery();
+        return;
+    }
     if (currentMode === "image" && currentUploadData) {
         startManualAnnotate();
         return;
@@ -250,7 +297,11 @@ startOverBtn.addEventListener("click", () => {
 
 // ── Back to slides ────────────────────────────────────────────────────
 backToSlidesBtn.addEventListener("click", () => {
-    showSection("slides");
+    if (currentMode === "image" && currentImageList.length > 1) {
+        renderImageGallery();
+    } else {
+        showSection("slides");
+    }
 });
 
 // ── Back to source (from slides view) ─────────────────────────────────
@@ -260,6 +311,8 @@ backToSourceBtn.addEventListener("click", () => {
         loadRuns();
     } else if (currentMode === "pdf") {
         showSection("pdf-upload");
+    } else if (currentMode === "image" && currentImageList.length > 0) {
+        showSection("upload");
     } else {
         showSection("upload");
     }
@@ -270,7 +323,7 @@ prevSlideBtn.addEventListener("click", () => {
     if (currentSlideIndex > 0) navigateToSlide(currentSlideIndex - 1);
 });
 nextSlideBtn.addEventListener("click", () => {
-    const totalSlides = currentMode === "browse" ? currentRunSlides.length : currentPdfSlides.length;
+    const totalSlides = currentMode === "browse" ? currentRunSlides.length : (currentMode === "image" ? currentImageList.length : currentPdfSlides.length);
     if (currentSlideIndex < totalSlides - 1) navigateToSlide(currentSlideIndex + 1);
 });
 
@@ -280,6 +333,8 @@ function navigateToSlide(idx) {
         loadBrowseSlideSegments(currentRunName, slide.name, idx);
     } else if (currentMode === "pdf") {
         startManualAnnotateSlide(idx);
+    } else if (currentMode === "image" && currentImageList.length > 1) {
+        startManualAnnotateImage(idx);
     }
 }
 
@@ -425,8 +480,7 @@ previewModal.addEventListener("click", (e) => { if (e.target === previewModal) c
 
 // ── Image File Handling ───────────────────────────────────────────────
 async function handleImageFile(file) {
-    const validTypes = ["image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff"];
-    if (!validTypes.includes(file.type) && !file.name.match(/\.(jpe?g|png|webp|bmp|tiff?)$/i)) {
+    if (!isImageFile(file)) {
         showToast("Unsupported file type. Please upload JPG, PNG, WebP, BMP, or TIFF.");
         return;
     }
@@ -457,6 +511,101 @@ async function handleImageFile(file) {
         showSection("upload");
         showToast("Error: " + err.message);
     }
+}
+
+// ── Multiple Image File Handling (folder upload) ─────────────────────
+async function handleImageFiles(files) {
+    showSection("processing");
+    statusText.textContent = `Uploading ${files.length} images...`;
+    statusHint.textContent = "";
+
+    const uploaded = [];
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.size > 50 * 1024 * 1024) {
+            showToast(`Skipping ${file.name}: exceeds 50 MB limit.`);
+            continue;
+        }
+        statusText.textContent = `Uploading ${i + 1} of ${files.length}...`;
+        try {
+            const formData = new FormData();
+            formData.append("file", file);
+            const res = await fetch("/upload", { method: "POST", body: formData });
+            if (!res.ok) {
+                showToast(`Failed to upload ${file.name}`);
+                continue;
+            }
+            const data = await res.json();
+            uploaded.push({
+                session_id: data.session_id,
+                filename: data.filename,
+                name: data.filename.replace(/\.[^.]+$/, ""),
+                width: data.width,
+                height: data.height,
+            });
+        } catch (err) {
+            showToast(`Error uploading ${file.name}: ${err.message}`);
+        }
+    }
+
+    if (uploaded.length === 0) {
+        showSection("upload");
+        showToast("No images were uploaded successfully.");
+        return;
+    }
+
+    currentImageList = uploaded;
+    currentSourceName = uploaded.length === 1 ? uploaded[0].name : "images";
+    renderImageGallery();
+}
+
+function renderImageGallery() {
+    showSection("slides");
+    slidesTitle.textContent = `${currentImageList.length} Images`;
+    slidesSubtitle.textContent = "";
+
+    slidesGrid.innerHTML = "";
+
+    currentImageList.forEach((img, idx) => {
+        const card = document.createElement("div");
+        card.className = "slide-card";
+        card.dataset.index = idx;
+
+        const thumbSrc = `/original-image/${img.session_id}`;
+
+        card.innerHTML = `
+            <div class="slide-preview">
+                <img src="${thumbSrc}" alt="${img.name}" loading="lazy">
+                <div class="slide-badge slide-badge-action">Click to annotate</div>
+            </div>
+            <div class="slide-info">
+                <span class="slide-name">${img.name.replace(/_/g, " ")}</span>
+                <span class="slide-dims">${img.width} x ${img.height}</span>
+            </div>
+        `;
+
+        card.addEventListener("click", () => {
+            startManualAnnotateImage(idx);
+        });
+
+        slidesGrid.appendChild(card);
+    });
+}
+
+function startManualAnnotateImage(idx) {
+    const img = currentImageList[idx];
+    currentImageIndex = idx;
+    currentSlideIndex = idx;
+    currentSessionId = img.session_id;
+    currentSourceName = img.name;
+    currentUploadData = img;
+    annotateSlideIndex = null;
+    extractedSegments = [];
+    currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
+    boxDragStart = null;
+    showSection("annotate");
+    setupAnnotateCanvas(`/original-image/${img.session_id}`);
+    renderAnnotateSegments();
 }
 
 // ── PDF File Handling ─────────────────────────────────────────────────
@@ -657,7 +806,7 @@ function renderResults() {
     segmentCount.textContent = `${allSegments.length} segments found`;
 
     // Show/hide slide navigation and mode-specific controls
-    const hasSlides = currentMode === "pdf" || currentMode === "browse";
+    const hasSlides = currentMode === "pdf" || currentMode === "browse" || (currentMode === "image" && currentImageList.length > 1);
     backToSlidesBtn.hidden = !hasSlides;
 
     // Hide upscale control in browse mode (pre-rendered at fixed upscale)
@@ -666,8 +815,9 @@ function renderResults() {
 
     if (hasSlides && currentSlideIndex !== null) {
         slideNav.hidden = false;
-        const totalSlides = currentMode === "browse" ? currentRunSlides.length : currentPdfSlides.length;
-        slideNavLabel.textContent = `Slide ${currentSlideIndex + 1} / ${totalSlides}`;
+        const totalSlides = currentMode === "browse" ? currentRunSlides.length : (currentMode === "image" ? currentImageList.length : currentPdfSlides.length);
+        const navPrefix = currentMode === "image" ? "Image" : "Slide";
+        slideNavLabel.textContent = `${navPrefix} ${currentSlideIndex + 1} / ${totalSlides}`;
         slideNavLabel.style.cursor = "pointer";
         slideNavLabel.title = "Back to slides grid";
         slideNavLabel.onclick = () => showSection("slides");
@@ -1252,6 +1402,8 @@ document.getElementById("annotate-done-btn").addEventListener("click", () => {
 document.getElementById("annotate-back-btn").addEventListener("click", () => {
     if (annotateSlideIndex !== null) {
         showSection("slides");
+    } else if (currentImageList.length > 1) {
+        renderImageGallery();
     } else {
         switchMode("image");
     }

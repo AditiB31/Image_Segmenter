@@ -29,18 +29,18 @@ _DEFAULTS = {
     "containment_thresh": 0.7,
     # Thumbnails
     "thumb_max": 512,
-    # Edge feathering (sticker-friendly defaults)
-    "feather_min_px": 1.0,
-    "feather_max_px": 3.0,
-    "feather_factor": 0.008,
+    # Edge feathering (balanced defaults for smooth edges)
+    "feather_min_px": 1.5,
+    "feather_max_px": 4.0,
+    "feather_factor": 0.012,
     # Edge processing (advanced)
     "morph_kernel_size": 3,
-    "contour_sigma_min": 2.5,
+    "contour_sigma_min": 2.0,
     "contour_sigma_max": 18.0,
-    "contour_sigma_divisor": 180.0,
-    "feather_blur_kernel": 3,
-    "feather_blur_sigma": 0.4,
-    "mask_upscale_sharpness": 0.08,
+    "contour_sigma_divisor": 150.0,
+    "feather_blur_kernel": 5,
+    "feather_blur_sigma": 0.6,
+    "mask_upscale_sharpness": 0.06,
     "dist_transform_mask_size": 5,
     # Tight cropping
     "tight_crop": True,

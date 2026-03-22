@@ -28,11 +28,17 @@
                         <polyline points="17 8 12 3 7 8"/>
                         <line x1="12" y1="3" x2="12" y2="15"/>
                     </svg>
-                    <p>Drag & drop an image here</p>
+                    <p>Drag & drop an image or folder here</p>
                     <p class="hint">or click to browse</p>
-                    <p class="formats">JPG, PNG, WebP, BMP, TIFF — up to 50 MB</p>
+                    <p class="formats">JPG, PNG, WebP, BMP, TIFF — up to 50 MB per file</p>
+                    <div class="upload-buttons">
+                        <button id="upload-file-btn" class="btn btn-primary btn-small">Select File</button>
+                        <button id="upload-folder-btn" class="btn btn-secondary btn-small">Select Folder</button>
+                    </div>
                 </div>
                 <input type="file" id="file-input" accept="image/*" hidden>
+                <input type="file" id="file-input-multiple" accept="image/*" multiple hidden>
+                <input type="file" id="folder-input" webkitdirectory hidden>
             </div>
         </section>
 

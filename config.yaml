@@ -98,13 +98,16 @@ thumb_max: 512
 #   feather_px = clamp(min(width, height) * feather_factor, min, max)
 
 # Minimum feather radius in pixels.
-feather_min_px: 1.0
+# Increased from 1.0 to 1.5 for smoother edges on small segments.
+feather_min_px: 1.5
 
 # Maximum feather radius in pixels.
-feather_max_px: 3.0
+# Increased from 3.0 to 4.0 for better edge blending on large segments.
+feather_max_px: 4.0
 
 # Feather factor (proportion of the segment's smaller dimension).
-feather_factor: 0.008
+# Increased from 0.008 to 0.012 for proportionally softer edges.
+feather_factor: 0.012
 
 # ─── Edge Processing (Advanced) ───────────────────────────────────────
 # These control the mask cleanup and smoothing pipeline.
@@ -116,15 +119,18 @@ morph_kernel_size: 3
 
 # Contour smoothing sigma bounds. Controls how much the mask boundary
 # is smoothed. Sigma = clamp(perimeter / divisor, min, max).
-contour_sigma_min: 2.5
+# Reduced sigma_min from 2.5 to 2.0 for smoother edges on simple shapes.
+# Reduced divisor from 180 to 150 for slightly more smoothing overall.
+contour_sigma_min: 2.0
 contour_sigma_max: 18.0
-contour_sigma_divisor: 180.0
+contour_sigma_divisor: 150.0
 
 # Final alpha blur after distance-transform feathering.
 # Set kernel to 1 and sigma to 0 for perfectly sharp edges.
-# These sticker-friendly defaults produce crisp edges for Keynote reuse.
-feather_blur_kernel: 3
-feather_blur_sigma: 0.4
+# Increased kernel from 3 to 5 and sigma from 0.4 to 0.6 for softer
+# edge transitions that reduce visible jagged edges.
+feather_blur_kernel: 5
+feather_blur_sigma: 0.6
 
 # Distance transform mask size for edge feathering (OpenCV param).
 # Options: 3, 5. 5 = more precise distance computation.
@@ -133,8 +139,9 @@ dist_transform_mask_size: 5
 # Sigmoid sharpness for mask upscaling. Controls how aggressively grey
 # fringe pixels are pushed to 0 or 255 during mask upscale from inference
 # to full resolution. Higher = sharper edge, lower = softer anti-aliasing.
-# Range: 0.04–0.15. Default 0.08 gives crisp but smooth edges.
-mask_upscale_sharpness: 0.08
+# Range: 0.04–0.15. Reduced from 0.08 to 0.06 for smoother anti-aliasing
+# at segment boundaries, reducing hard pixel staircase artifacts.
+mask_upscale_sharpness: 0.06
 
 # Maximum allowed upscale factor (safety cap to prevent OOM).
 max_upscale: 4
@@ -152,11 +159,19 @@ tight_crop: true
 tight_crop_padding: 4
 
 # ─── Edge Presets ─────────────────────────────────────────────────────
-# Defaults above are tuned for sticker/Keynote use (crisp edges).
+# Defaults above are tuned for balanced edge quality (smooth but defined).
+# For sharper sticker-style edges, use these values:
+# feather_min_px: 1.0
+# feather_max_px: 3.0
+# feather_blur_kernel: 3
+# feather_blur_sigma: 0.4
+# feather_factor: 0.008
+# mask_upscale_sharpness: 0.08
+#
 # For softer compositing (photo blending), use these values:
 # feather_min_px: 2.0
 # feather_max_px: 6.0
-# feather_blur_kernel: 5
+# feather_blur_kernel: 7
 # feather_blur_sigma: 1.0
 # feather_factor: 0.015
 

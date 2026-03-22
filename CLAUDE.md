@@ -33,7 +33,7 @@ python pdf_pipeline.py data/pdfs/MyPresentation.pdf
 python pdf_pipeline.py /external/path/deck.pdf --dpi 300 --slides 1-5 --upscale 2
 ```
 
-The SAM 2.1 model loads into memory at startup (takes a few seconds). There is no test suite.
+The SAM 2.1 model loads into memory at startup (takes a few seconds). Run tests with `python -m pytest tests/`.
 
 ## Architecture
 
@@ -43,7 +43,7 @@ The SAM 2.1 model loads into memory at startup (takes a few seconds). There is n
 - **config.yaml** — Central configuration file with all tunable parameters and inline documentation. Covers segmentation, SAM model params, feathering, tight cropping, PDF pipeline, paths, and web server settings.
 - **config.py** — Loads `config.yaml` and exposes a module-level `cfg` dict with built-in defaults. Gracefully falls back to defaults if YAML file or pyyaml is missing.
 - **setup_model.py** — One-time setup: installs `sam2` package and downloads the checkpoint.
-- **templates/index.html** + **static/js/app.js** + **static/css/style.css** — Single-page frontend with three-mode UI: Upload Image, Upload PDF, Browse Runs. Manual annotation is the default workflow: after image upload or PDF slide selection, the annotation canvas opens directly. Tools include point (foreground/background), polygon, and box annotation; extracted segments appear immediately in a gallery strip with per-segment removal and ZIP download. Auto Segment All is available as an alternative from the annotation toolbar. Supports slide navigation, segment gallery with selection/filtering/sorting, and modal preview.
+- **templates/index.html** + **static/js/app.js** + **static/css/style.css** — Single-page frontend with three-mode UI: Upload Image, Upload PDF, Browse Runs. Clicking the Upload Image or Upload PDF tab auto-opens the file picker. Manual annotation is the default workflow: after image upload or PDF slide selection, the annotation canvas opens directly. Folder and multi-file uploads display a gallery grid (like PDF slides) for browsing and annotating individual images. Tools include point (foreground/background), polygon, and box annotation; extracted segments appear immediately in a gallery strip with per-segment removal and ZIP download. Auto Segment All is available as an alternative from the annotation toolbar. Supports slide/image navigation, segment gallery with selection/filtering/sorting, and modal preview.
 
 ## Key Details
 
