@@ -689,5 +689,62 @@ def browse_download(run_name, slide_name, filename):
     return send_file(filepath, as_attachment=True)
 
 
+@app.route("/browse/download-all/<run_name>/<slide_name>", methods=["POST"])
+def browse_download_all(run_name, slide_name):
+    """ZIP selected rendered segments from a pipeline run."""
+    if not _safe_component(run_name) or not _safe_component(slide_name):
+        return jsonify({"error": "Invalid path"}), 400
+
+    run_path = os.path.join(SEGMENTS_DIR, run_name)
+
+    # Find rendered directory (new or legacy format)
+    rendered_dir = os.path.join(run_path, slide_name, "rendered")
+    if not os.path.isdir(rendered_dir):
+        rendered_dir = os.path.join(run_path, "rendered")
+    if not os.path.isdir(rendered_dir):
+        return jsonify({"error": "Rendered segments not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    requested_indices = data.get("indices")
+
+    # Collect files to zip
+    files = []
+    for fname in sorted(os.listdir(rendered_dir)):
+        if not fname.endswith(".png"):
+            continue
+        if requested_indices is not None:
+            try:
+                idx = int(fname.split("_")[1].split(".")[0])
+                if idx not in requested_indices:
+                    continue
+            except (IndexError, ValueError):
+                continue
+        files.append((os.path.join(rendered_dir, fname), fname))
+
+    if not files:
+        return jsonify({"error": "No segments found"}), 404
+
+    zip_path = os.path.join(run_path, slide_name, f"browse_download.zip")
+    os.makedirs(os.path.dirname(zip_path), exist_ok=True)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path, fname in files:
+            zf.write(path, fname)
+
+    @after_this_request
+    def _cleanup_zip(response):
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
+        return response
+
+    return send_file(
+        zip_path,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{slide_name}_segments.zip",
+    )
+
+
 if __name__ == "__main__":
     app.run(debug=False, host=cfg["host"], port=cfg["port"])

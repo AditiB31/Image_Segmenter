@@ -298,24 +298,26 @@ downloadBtn.addEventListener("click", async () => {
 });
 
 async function downloadBrowseSegments() {
-    // Download rendered PNGs from browse mode (already rendered by pipeline)
+    // Download rendered PNGs from browse mode as a ZIP
     const indices = selectedIndices.size > 0 ? [...selectedIndices] : allSegments.map((s) => s.index);
     downloadBtn.disabled = true;
-    downloadBtn.textContent = "Downloading...";
+    downloadBtn.textContent = "Preparing ZIP...";
 
     try {
-        // Download each segment individually (they're already rendered)
-        for (const idx of indices) {
-            const seg = allSegments.find((s) => s.index === idx);
-            if (!seg) continue;
-            const url = `/browse/download/${currentRunName}/${currentSlideName}/${seg.filename}`;
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = seg.filename;
-            a.click();
-            // Small delay to avoid browser throttling
-            await new Promise((r) => setTimeout(r, 200));
-        }
+        const res = await fetch(`/browse/download-all/${currentRunName}/${currentSlideName}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ indices }),
+        });
+        if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Download failed"); }
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${currentSlideName}_segments.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
     } catch (err) {
         alert("Error: " + err.message);
     } finally {
