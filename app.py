@@ -447,6 +447,63 @@ def annotate(session_id):
     )
 
 
+@app.route("/annotate-slide/<session_id>/<int:slide_index>", methods=["POST"])
+def annotate_slide(session_id, slide_index):
+    """Run SAM prediction with user prompts on a PDF slide image."""
+    if not _safe_component(session_id):
+        return jsonify({"error": "Invalid session"}), 400
+    cleanup_old_sessions()
+
+    pdf_session = _load_pdf_session(session_id)
+    if pdf_session is None:
+        return jsonify({"error": "PDF session not found"}), 404
+
+    if slide_index < 0 or slide_index >= len(pdf_session["slides"]):
+        return jsonify({"error": "Slide index out of range"}), 400
+
+    slide_info = pdf_session["slides"][slide_index]
+    slide_name = slide_info["name"]
+    slide_path = os.path.join(pdf_session["images_dir"], slide_info["filename"])
+
+    if not os.path.exists(slide_path):
+        return jsonify({"error": "Slide image not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    prompts = data.get("prompts", [])
+    if not isinstance(prompts, list) or not prompts:
+        return jsonify({"error": "No prompts provided"}), 400
+    if len(prompts) > 50:
+        return jsonify({"error": "Too many prompts (max 50)"}), 400
+
+    max_dim = data.get("max_dim", cfg["max_dim"])
+    seg_output_dir = os.path.join(OUTPUT_DIR, session_id, slide_name)
+
+    try:
+        segments = segmenter.predict_with_prompts(
+            slide_path, seg_output_dir, prompts, max_dim=max_dim
+        )
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower() or "mps" in str(e).lower():
+            return jsonify(
+                {"error": "Out of memory. Try a smaller image."}
+            ), 500
+        return jsonify({"error": "Segmentation failed"}), 500
+    except Exception:
+        return jsonify({"error": "Segmentation failed"}), 500
+
+    _cleanup_memory()
+
+    return jsonify(
+        {
+            "session_id": session_id,
+            "slide_name": slide_name,
+            "slide_index": slide_index,
+            "segment_count": len(segments),
+            "segments": segments,
+        }
+    )
+
+
 # ── PDF Upload Routes ──────────────────────────────────────────────────
 
 
@@ -575,6 +632,23 @@ def slide_image(session_id, filename):
     if not os.path.isdir(thumbs_dir):
         return jsonify({"error": "Session not found"}), 404
     return send_from_directory(thumbs_dir, filename, mimetype="image/png")
+
+
+@app.route("/original-slide-image/<session_id>/<int:slide_index>")
+def original_slide_image(session_id, slide_index):
+    """Serve the full-resolution slide image for the annotation canvas."""
+    if not _safe_component(session_id):
+        return jsonify({"error": "Invalid session"}), 400
+    pdf_session = _load_pdf_session(session_id)
+    if pdf_session is None:
+        return jsonify({"error": "PDF session not found"}), 404
+    if slide_index < 0 or slide_index >= len(pdf_session["slides"]):
+        return jsonify({"error": "Slide index out of range"}), 400
+    slide_info = pdf_session["slides"][slide_index]
+    slide_path = os.path.join(pdf_session["images_dir"], slide_info["filename"])
+    if not os.path.exists(slide_path):
+        return jsonify({"error": "Slide image not found"}), 404
+    return send_file(slide_path)
 
 
 @app.route("/segment-slide/<session_id>/<int:slide_index>", methods=["POST"])

@@ -57,11 +57,9 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000) in your browser. The model l
 
 The web UI has three modes accessible via tabs:
 
-1. **Upload Image** — Upload a single image (JPG, PNG, WebP, BMP, TIFF). Choose between:
-   - **Auto Segment All** — SAM 2.1 segments all objects and displays them in a gallery.
-   - **Manual Annotate** — Click points, draw polygons, or drag bounding boxes to extract specific objects. See each segment immediately as it's extracted. Download individual PNGs or all as a ZIP at your chosen quality level (1x–4x).
+1. **Upload Image** — Upload a single image (JPG, PNG, WebP, BMP, TIFF). Opens directly in the annotation canvas where you click points, draw polygons, or drag bounding boxes to extract specific objects. Each segment appears immediately in a gallery strip with per-segment removal, quality selector (1x–4x), and ZIP download. An "Auto Segment All" button is available in the toolbar for automatic segmentation.
 
-2. **Upload PDF** — Upload a presentation PDF. Slides are converted to images (cached for future use). Click any slide to segment it on demand. Navigate between slides with prev/next controls.
+2. **Upload PDF** — Upload a presentation PDF. Slides are converted to images (cached for future use). Click any slide to open it in the annotation canvas for manual segment extraction. Navigate between slides with prev/next controls. The typical workflow is: click slide → annotate segments → download → back to slides → next slide.
 
 3. **Browse Runs** — View results from previous CLI pipeline runs. Select a run, then a slide, to see its extracted segments. Download rendered PNGs directly.
 
@@ -151,8 +149,8 @@ Parameters can also be overridden via CLI flags (for the PDF pipeline) or API pa
 ## Architecture
 
 ```
-app.py           — Flask routes: image upload, PDF upload, segmentation, browsing
-segmenter.py     — ImageSegmenter class wrapping SAM2AutomaticMaskGenerator
+app.py           — Flask routes: image upload, PDF upload, annotation, segmentation, browsing
+segmenter.py     — ImageSegmenter class wrapping SAM2AutomaticMaskGenerator + SAM2ImagePredictor
 pdf_pipeline.py  — CLI: PDF -> cached slide images -> segmented assets
 config.yaml      — Central configuration (all tunable parameters)
 config.py        — Configuration loader with built-in defaults

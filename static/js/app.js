@@ -87,6 +87,7 @@ let currentPrompt = { points: [], contour: [], contourClosed: false, box: null }
 let extractedSegments = [];
 let boxDragStart = null;
 let currentUploadData = null;
+let annotateSlideIndex = null;  // non-null when annotating a PDF slide
 
 // ── Toast Notifications ───────────────────────────────────────────────
 const toastContainer = document.getElementById("toast-container");
@@ -190,6 +191,7 @@ function resetState() {
     extractedSegments = [];
     currentUploadData = null;
     annotateImage = null;
+    annotateSlideIndex = null;
     currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
     boxDragStart = null;
     fileInput.value = "";
@@ -231,7 +233,6 @@ pdfFileInput.addEventListener("change", () => {
 // ── Start Over ────────────────────────────────────────────────────────
 startOverBtn.addEventListener("click", () => {
     if (currentMode === "pdf" && currentPdfSlides.length > 0) {
-        // Go back to slides view
         showSection("slides");
         return;
     }
@@ -240,9 +241,8 @@ startOverBtn.addEventListener("click", () => {
         loadRuns();
         return;
     }
-    // If coming from manual annotation, go back to mode choice
     if (currentMode === "image" && currentUploadData) {
-        showModeChoice(currentUploadData);
+        startManualAnnotate();
         return;
     }
     switchMode(currentMode);
@@ -279,7 +279,7 @@ function navigateToSlide(idx) {
         const slide = currentRunSlides[idx];
         loadBrowseSlideSegments(currentRunName, slide.name, idx);
     } else if (currentMode === "pdf") {
-        segmentSlide(idx);
+        startManualAnnotateSlide(idx);
     }
 }
 
@@ -451,8 +451,8 @@ async function handleImageFile(file) {
         currentSourceName = uploadData.filename.replace(/\.[^.]+$/, "");
         currentUploadData = uploadData;
 
-        // Show mode choice instead of auto-segmenting
-        showModeChoice(uploadData);
+        // Go directly to manual annotation (default workflow)
+        startManualAnnotate();
     } catch (err) {
         showSection("upload");
         showToast("Error: " + err.message);
@@ -521,7 +521,7 @@ function renderSlidesGrid(title, slides, cached) {
 
         const badge = isSegmented || hasSegments
             ? `<div class="slide-badge">${checkIcon} ${slide.segment_count || ""} segments</div>`
-            : `<div class="slide-badge slide-badge-action">Click to segment</div>`;
+            : `<div class="slide-badge slide-badge-action">Click to annotate</div>`;
 
         card.innerHTML = `
             <div class="slide-preview">
@@ -536,7 +536,7 @@ function renderSlidesGrid(title, slides, cached) {
 
         card.addEventListener("click", () => {
             if (currentMode === "pdf") {
-                segmentSlide(idx);
+                startManualAnnotateSlide(idx);
             } else if (currentMode === "browse") {
                 loadBrowseSlideSegments(currentRunName, slide.name, idx);
             }
@@ -547,36 +547,7 @@ function renderSlidesGrid(title, slides, cached) {
 }
 
 // ── Segment a PDF Slide ───────────────────────────────────────────────
-async function segmentSlide(idx) {
-    currentSlideIndex = idx;
-    const slide = currentPdfSlides[idx];
-    currentSlideName = slide.name;
-
-    showSection("processing");
-    statusText.textContent = `Segmenting ${slide.name.replace(/_/g, " ")}...`;
-    statusHint.textContent = `Slide ${idx + 1} of ${currentPdfSlides.length}`;
-
-    try {
-        const res = await fetch(`/segment-slide/${currentSessionId}/${idx}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ min_area: 100 }),
-        });
-        if (!res.ok) throw new Error(await getErrorMessage(res, "Segmentation failed"));
-        const data = await res.json();
-        allSegments = data.segments;
-        selectedIndices.clear();
-        segmentedSlides.add(slide.name);
-
-        // Update the slide's segment count for when we go back
-        currentPdfSlides[idx].segment_count = data.segment_count;
-
-        renderResults();
-    } catch (err) {
-        showSection("slides");
-        showToast("Error: " + err.message);
-    }
-}
+// segmentSlide removed — auto-segmenting is handled by autoSegmentCurrent()
 
 // ── Browse Runs ───────────────────────────────────────────────────────
 async function loadRuns() {
@@ -854,59 +825,90 @@ function showSection(name) {
     resultsSection.hidden = name !== "results";
 }
 
-// ── Mode Choice ───────────────────────────────────────────────────────
+// ── Auto Segment (accessible from annotation toolbar) ────────────────
 
-function showModeChoice(uploadData) {
-    const img = document.getElementById("mode-choice-image");
-    img.src = previewImage.src;
-    img.hidden = false;
-    document.getElementById("mode-choice-info").textContent =
-        `${uploadData.filename} \u2014 ${uploadData.width} \u00d7 ${uploadData.height} px`;
-    showSection("mode-choice");
-}
-
-document.getElementById("auto-segment-btn").addEventListener("click", autoSegmentImage);
-document.getElementById("manual-annotate-btn").addEventListener("click", startManualAnnotate);
-document.getElementById("mode-choice-reupload").addEventListener("click", (e) => {
-    e.preventDefault();
-    switchMode("image");
-});
-
-async function autoSegmentImage() {
+async function autoSegmentCurrent() {
     showSection("processing");
-    statusText.textContent = "Segmenting image...";
-    statusHint.textContent = `${currentUploadData.width} \u00d7 ${currentUploadData.height} px \u2014 this may take a moment`;
 
-    try {
-        const segRes = await fetch(`/segment/${currentSessionId}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ min_area: 100 }),
-        });
-        if (!segRes.ok) throw new Error(await getErrorMessage(segRes, "Segmentation failed"));
-        const segData = await segRes.json();
-        allSegments = segData.segments;
-        selectedIndices.clear();
-        currentSlideName = null;
-        renderResults();
-    } catch (err) {
-        showSection("mode-choice");
-        showToast("Error: " + err.message);
+    if (annotateSlideIndex !== null) {
+        // Auto-segment a PDF slide
+        const slide = currentPdfSlides[annotateSlideIndex];
+        statusText.textContent = `Segmenting ${slide.name.replace(/_/g, " ")}...`;
+        statusHint.textContent = "This may take a moment";
+
+        try {
+            const segRes = await fetch(`/segment-slide/${currentSessionId}/${annotateSlideIndex}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ min_area: 100 }),
+            });
+            if (!segRes.ok) throw new Error(await getErrorMessage(segRes, "Segmentation failed"));
+            const segData = await segRes.json();
+            allSegments = segData.segments;
+            selectedIndices.clear();
+            currentSlideName = slide.name;
+            currentSlideIndex = annotateSlideIndex;
+            segmentedSlides.add(slide.name);
+            currentPdfSlides[annotateSlideIndex].segment_count = segData.segment_count;
+            renderResults();
+        } catch (err) {
+            showSection("annotate");
+            showToast("Error: " + err.message);
+        }
+    } else {
+        // Auto-segment an uploaded image
+        statusText.textContent = "Segmenting image...";
+        statusHint.textContent = currentUploadData
+            ? `${currentUploadData.width} \u00d7 ${currentUploadData.height} px \u2014 this may take a moment`
+            : "";
+
+        try {
+            const segRes = await fetch(`/segment/${currentSessionId}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ min_area: 100 }),
+            });
+            if (!segRes.ok) throw new Error(await getErrorMessage(segRes, "Segmentation failed"));
+            const segData = await segRes.json();
+            allSegments = segData.segments;
+            selectedIndices.clear();
+            currentSlideName = null;
+            renderResults();
+        } catch (err) {
+            showSection("annotate");
+            showToast("Error: " + err.message);
+        }
     }
 }
+
+document.getElementById("annotate-auto-segment-btn").addEventListener("click", autoSegmentCurrent);
 
 // ── Manual Annotation ─────────────────────────────────────────────────
 
 function startManualAnnotate() {
+    annotateSlideIndex = null;
     extractedSegments = [];
     currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
     boxDragStart = null;
     showSection("annotate");
-    setupAnnotateCanvas();
+    setupAnnotateCanvas(`/original-image/${currentSessionId}`);
     renderAnnotateSegments();
 }
 
-function setupAnnotateCanvas() {
+function startManualAnnotateSlide(idx) {
+    const slide = currentPdfSlides[idx];
+    annotateSlideIndex = idx;
+    currentSlideIndex = idx;
+    currentSlideName = slide.name;
+    extractedSegments = [];
+    currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
+    boxDragStart = null;
+    showSection("annotate");
+    setupAnnotateCanvas(`/original-slide-image/${currentSessionId}/${idx}`);
+    renderAnnotateSegments();
+}
+
+function setupAnnotateCanvas(imageSrc) {
     const img = new Image();
     img.onload = () => {
         annotateImage = img;
@@ -915,9 +917,13 @@ function setupAnnotateCanvas() {
     };
     img.onerror = () => {
         showToast("Failed to load image for annotation.");
-        showModeChoice(currentUploadData);
+        if (annotateSlideIndex !== null) {
+            showSection("slides");
+        } else {
+            switchMode("image");
+        }
     };
-    img.src = `/original-image/${currentSessionId}`;
+    img.src = imageSrc;
 }
 
 window.addEventListener("resize", debounce(() => {
@@ -1176,7 +1182,10 @@ async function extractSegment() {
     extractBtn.textContent = "Extracting...";
 
     try {
-        const res = await fetch(`/annotate/${currentSessionId}`, {
+        const annotateUrl = annotateSlideIndex !== null
+            ? `/annotate-slide/${currentSessionId}/${annotateSlideIndex}`
+            : `/annotate/${currentSessionId}`;
+        const res = await fetch(annotateUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ prompts: [prompt] }),
@@ -1219,7 +1228,7 @@ function renderAnnotateSegments() {
         const card = document.createElement("div");
         card.className = "annotate-segment-card";
         card.innerHTML = `
-            <img src="/segment-image/${currentSessionId}/${seg.filename}" alt="Segment ${seg.index}">
+            <img src="/segment-image/${currentSessionId}/${seg.filename}${annotateSlideIndex !== null ? `?slide=${currentSlideName}` : ""}" alt="Segment ${seg.index}">
             <button class="annotate-segment-remove" title="Remove">&times;</button>
         `;
         card.querySelector(".annotate-segment-remove").addEventListener("click", (e) => {
@@ -1236,12 +1245,16 @@ function renderAnnotateSegments() {
 document.getElementById("annotate-done-btn").addEventListener("click", () => {
     allSegments = [...extractedSegments];
     selectedIndices.clear();
-    currentSlideName = null;
+    // currentSlideName is already set for PDF slides, null for images
     renderResults();
 });
 
 document.getElementById("annotate-back-btn").addEventListener("click", () => {
-    showModeChoice(currentUploadData);
+    if (annotateSlideIndex !== null) {
+        showSection("slides");
+    } else {
+        switchMode("image");
+    }
 });
 
 // ── Annotation Download ───────────────────────────────────────────────
@@ -1254,10 +1267,12 @@ document.getElementById("annotate-download-btn").addEventListener("click", async
     dlBtn.textContent = "Preparing...";
 
     try {
+        const payload = { indices, upscale };
+        if (annotateSlideIndex !== null && currentSlideName) payload.slide = currentSlideName;
         const res = await fetch(`/download-all/${currentSessionId}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ indices, upscale }),
+            body: JSON.stringify(payload),
         });
         if (!res.ok) throw new Error(await getErrorMessage(res, "Download failed"));
 
@@ -1265,7 +1280,8 @@ document.getElementById("annotate-download-btn").addEventListener("click", async
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `${currentSourceName || "segments"}_manual_${upscale}x.zip`;
+        const slideSuffix = currentSlideName ? `_${currentSlideName}` : "";
+        a.download = `${currentSourceName || "segments"}${slideSuffix}_manual_${upscale}x.zip`;
         a.click();
         URL.revokeObjectURL(url);
     } catch (err) {
