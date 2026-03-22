@@ -28,6 +28,14 @@ _DEFAULTS = {
     "feather_min_px": 2.0,
     "feather_max_px": 8.0,
     "feather_factor": 0.012,
+    # Edge processing (advanced)
+    "morph_kernel_size": 3,
+    "contour_sigma_min": 2.5,
+    "contour_sigma_max": 18.0,
+    "contour_sigma_divisor": 180.0,
+    "feather_blur_kernel": 5,
+    "feather_blur_sigma": 0.8,
+    "dist_transform_mask_size": 5,
     # Tight cropping
     "tight_crop": True,
     "tight_crop_padding": 4,

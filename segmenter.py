@@ -339,7 +339,8 @@ class ImageSegmenter:
         # ── Morphological cleanup ────────────────────────────────────────────
         # Remove isolated noise pixels (1-2px) that SAM sometimes produces at
         # mask boundaries before contour extraction.
-        morph_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        ks = cfg["morph_kernel_size"]
+        morph_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
         mask_inf = cv2.morphologyEx(mask_inf, cv2.MORPH_OPEN, morph_k)
 
         # ── Contour-based boundary smoothing at inference resolution ──────────
@@ -367,7 +368,10 @@ class ImageSegmenter:
             # Sigma spans ~1-3% of the perimeter — enough to damp the
             # pixel-level rasterization noise in SAM's binary mask without
             # reshaping corners or curves of the actual object.
-            sigma = max(2.5, min(len(pts) / 180.0, 18.0))
+            sigma = max(
+                cfg["contour_sigma_min"],
+                min(len(pts) / cfg["contour_sigma_divisor"], cfg["contour_sigma_max"]),
+            )
             ks = int(6 * sigma) | 1  # kernel size (always odd)
             pad = ks // 2  # circular wrap-around padding
 
@@ -423,7 +427,9 @@ class ImageSegmenter:
         # get a proportionally wider falloff.
         binary_mask = (full_mask_np > 127).astype(np.uint8)
         del full_mask_np
-        dist = cv2.distanceTransform(binary_mask, cv2.DIST_L2, 5)
+        dist = cv2.distanceTransform(
+            binary_mask, cv2.DIST_L2, cfg["dist_transform_mask_size"]
+        )
         feather_px = max(
             cfg["feather_min_px"],
             min(min(fw, fh) * cfg["feather_factor"], cfg["feather_max_px"]),
@@ -432,7 +438,10 @@ class ImageSegmenter:
         # Smoothstep t²(3−2t) for natural-looking edge falloff
         alpha_float = alpha_float * alpha_float * (3.0 - 2.0 * alpha_float)
         alpha_np = (alpha_float * 255).astype(np.uint8)
-        alpha_np = cv2.GaussianBlur(alpha_np, (5, 5), sigmaX=0.8)
+        blur_k = cfg["feather_blur_kernel"]
+        blur_s = cfg["feather_blur_sigma"]
+        if blur_k > 1 and blur_s > 0:
+            alpha_np = cv2.GaussianBlur(alpha_np, (blur_k, blur_k), sigmaX=blur_s)
         segment_img.putalpha(Image.fromarray(alpha_np, "L"))
 
         # ── Tight cropping ────────────────────────────────────────────────

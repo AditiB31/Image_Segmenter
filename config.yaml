@@ -73,6 +73,32 @@ feather_max_px: 8.0
 # Feather factor (proportion of the segment's smaller dimension).
 feather_factor: 0.012
 
+# ─── Edge Processing (Advanced) ───────────────────────────────────────
+# These control the mask cleanup and smoothing pipeline.
+# Only change if you understand the rendering pipeline.
+
+# Morphological cleanup kernel size (pixels). Removes isolated noise.
+# Must be odd. Range: 3–7. Larger = more aggressive cleanup.
+morph_kernel_size: 3
+
+# Contour smoothing sigma bounds. Controls how much the mask boundary
+# is smoothed. Sigma = clamp(perimeter / divisor, min, max).
+contour_sigma_min: 2.5
+contour_sigma_max: 18.0
+contour_sigma_divisor: 180.0
+
+# Final alpha blur after distance-transform feathering.
+# Set kernel to 1 and sigma to 0 for perfectly sharp edges (sticker mode).
+feather_blur_kernel: 5
+feather_blur_sigma: 0.8
+
+# Distance transform mask size for edge feathering (OpenCV param).
+# Options: 3, 5. 5 = more precise distance computation.
+dist_transform_mask_size: 5
+
+# Maximum allowed upscale factor (safety cap to prevent OOM).
+max_upscale: 4
+
 # ─── Tight Cropping ────────────────────────────────────────────────────────
 # Remove empty transparent space around segments for smaller file sizes.
 
