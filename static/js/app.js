@@ -71,6 +71,23 @@ let currentRunName = null;
 let currentRunSlides = [];
 let browseImagesDir = null;
 
+// ── Toast Notifications ───────────────────────────────────────────────
+const toastContainer = document.getElementById("toast-container");
+
+function showToast(message, type = "error", duration = 5000) {
+    const toast = document.createElement("div");
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    toastContainer.appendChild(toast);
+    setTimeout(() => {
+        toast.classList.add("toast-out");
+        toast.addEventListener("animationend", () => toast.remove());
+    }, duration);
+}
+
+// Track source name for download filenames
+let currentSourceName = "";
+
 // ── Utilities ─────────────────────────────────────────────────────────
 function debounce(fn, ms) {
     let timer;
@@ -143,6 +160,7 @@ function resetState() {
     currentRunSlides = [];
     browseImagesDir = null;
     segmentedSlides.clear();
+    currentSourceName = "";
     fileInput.value = "";
     pdfFileInput.value = "";
     previewImage.hidden = true;
@@ -294,11 +312,13 @@ downloadBtn.addEventListener("click", async () => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `segments_${upscale}x.zip`;
+        const prefix = currentSourceName || "segments";
+        const slideSuffix = currentSlideName ? `_${currentSlideName}` : "";
+        a.download = `${prefix}${slideSuffix}_${upscale}x.zip`;
         a.click();
         URL.revokeObjectURL(url);
     } catch (err) {
-        alert("Error: " + err.message);
+        showToast("Error: " + err.message);
     } finally {
         downloadBtn.disabled = false;
         updateSelectionUI();
@@ -323,11 +343,12 @@ async function downloadBrowseSegments() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `${currentSlideName}_segments.zip`;
+        const runPrefix = currentSourceName || currentRunName || "browse";
+        a.download = `${runPrefix}_${currentSlideName}_segments.zip`;
         a.click();
         URL.revokeObjectURL(url);
     } catch (err) {
-        alert("Error: " + err.message);
+        showToast("Error: " + err.message);
     } finally {
         downloadBtn.disabled = false;
         updateSelectionUI();
@@ -355,10 +376,10 @@ previewModal.addEventListener("click", (e) => { if (e.target === previewModal) c
 async function handleImageFile(file) {
     const validTypes = ["image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff"];
     if (!validTypes.includes(file.type) && !file.name.match(/\.(jpe?g|png|webp|bmp|tiff?)$/i)) {
-        alert("Unsupported file type. Please upload JPG, PNG, WebP, BMP, or TIFF.");
+        showToast("Unsupported file type. Please upload JPG, PNG, WebP, BMP, or TIFF.");
         return;
     }
-    if (file.size > 50 * 1024 * 1024) { alert("File is too large. Maximum size is 50 MB."); return; }
+    if (file.size > 50 * 1024 * 1024) { showToast("File is too large. Maximum size is 50 MB."); return; }
 
     const previewUrl = URL.createObjectURL(file);
     previewImage.src = previewUrl;
@@ -376,6 +397,7 @@ async function handleImageFile(file) {
         if (!uploadRes.ok) { const err = await uploadRes.json(); throw new Error(err.error || "Upload failed"); }
         const uploadData = await uploadRes.json();
         currentSessionId = uploadData.session_id;
+        currentSourceName = uploadData.filename.replace(/\.[^.]+$/, "");
 
         statusText.textContent = "Segmenting image...";
         statusHint.textContent = `${uploadData.width} x ${uploadData.height} px -- this may take a moment`;
@@ -393,17 +415,17 @@ async function handleImageFile(file) {
         renderResults();
     } catch (err) {
         showSection("upload");
-        alert("Error: " + err.message);
+        showToast("Error: " + err.message);
     }
 }
 
 // ── PDF File Handling ─────────────────────────────────────────────────
 async function handlePdfFile(file) {
     if (!file.name.match(/\.pdf$/i)) {
-        alert("Please upload a PDF file.");
+        showToast("Please upload a PDF file.");
         return;
     }
-    if (file.size > 50 * 1024 * 1024) { alert("File is too large. Maximum size is 50 MB."); return; }
+    if (file.size > 50 * 1024 * 1024) { showToast("File is too large. Maximum size is 50 MB."); return; }
 
     showSection("processing");
     statusText.textContent = "Uploading PDF...";
@@ -418,12 +440,13 @@ async function handlePdfFile(file) {
 
         currentSessionId = data.session_id;
         currentPdfSlides = data.slides;
+        currentSourceName = data.pdf_name;
         segmentedSlides.clear();
 
         renderSlidesGrid(data.pdf_name, data.slides, data.cached);
     } catch (err) {
         showSection("pdf-upload");
-        alert("Error: " + err.message);
+        showToast("Error: " + err.message);
     }
 }
 
@@ -450,8 +473,9 @@ function renderSlidesGrid(title, slides, cached) {
         let thumbSrc;
         if (currentMode === "pdf") {
             thumbSrc = `/slide-image/${currentSessionId}/${slide.filename || slide.name + ".png"}`;
+        } else if (currentMode === "browse" && currentRunName) {
+            thumbSrc = `/browse/slide-image/${currentRunName}/${slide.name}`;
         } else {
-            // Browse mode: try to load from cached images
             thumbSrc = "";
         }
 
@@ -510,7 +534,7 @@ async function segmentSlide(idx) {
         renderResults();
     } catch (err) {
         showSection("slides");
-        alert("Error: " + err.message);
+        showToast("Error: " + err.message);
     }
 }
 
@@ -561,7 +585,7 @@ async function loadRuns() {
         });
     } catch (err) {
         browseLoading.hidden = true;
-        alert("Error loading runs: " + err.message);
+        showToast("Error loading runs: " + err.message);
     }
 }
 
@@ -577,6 +601,7 @@ async function loadRun(runName) {
 
         currentRunSlides = data.slides;
         browseImagesDir = data.images_dir;
+        currentSourceName = data.pdf_name || runName;
 
         // Build slides data for the grid
         const slides = data.slides.map((s) => ({
@@ -588,7 +613,7 @@ async function loadRun(runName) {
         renderSlidesGrid(data.pdf_name.replace(/_/g, " "), slides, false);
     } catch (err) {
         showSection("browse");
-        alert("Error loading run: " + err.message);
+        showToast("Error loading run: " + err.message);
     }
 }
 
@@ -608,7 +633,7 @@ async function loadBrowseSlideSegments(runName, slideName, slideIdx) {
         renderResults();
     } catch (err) {
         showSection("slides");
-        alert("Error: " + err.message);
+        showToast("Error: " + err.message);
     }
 }
 
@@ -617,14 +642,21 @@ function renderResults() {
     showSection("results");
     segmentCount.textContent = `${allSegments.length} segments found`;
 
-    // Show/hide slide navigation
+    // Show/hide slide navigation and mode-specific controls
     const hasSlides = currentMode === "pdf" || currentMode === "browse";
     backToSlidesBtn.hidden = !hasSlides;
+
+    // Hide upscale control in browse mode (pre-rendered at fixed upscale)
+    const upscaleControl = document.querySelector(".upscale-control");
+    if (upscaleControl) upscaleControl.hidden = currentMode === "browse";
 
     if (hasSlides && currentSlideIndex !== null) {
         slideNav.hidden = false;
         const totalSlides = currentMode === "browse" ? currentRunSlides.length : currentPdfSlides.length;
         slideNavLabel.textContent = `Slide ${currentSlideIndex + 1} / ${totalSlides}`;
+        slideNavLabel.style.cursor = "pointer";
+        slideNavLabel.title = "Back to slides grid";
+        slideNavLabel.onclick = () => showSection("slides");
         prevSlideBtn.disabled = currentSlideIndex <= 0;
         nextSlideBtn.disabled = currentSlideIndex >= totalSlides - 1;
     } else {

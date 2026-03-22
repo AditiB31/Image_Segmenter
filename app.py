@@ -34,6 +34,22 @@ from segmenter import ImageSegmenter
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = cfg["max_upload_mb"] * 1024 * 1024
 
+# Track whether MPS is available for memory management
+_HAS_MPS = False
+try:
+    import torch
+    _HAS_MPS = torch.backends.mps.is_available()
+except ImportError:
+    pass
+
+
+def _cleanup_memory():
+    """Free GPU and Python memory. Call after every major operation."""
+    if _HAS_MPS:
+        import torch
+        torch.mps.empty_cache()
+    gc.collect()
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
@@ -79,19 +95,34 @@ def _load_pdf_session(session_id):
     return None
 
 
+_last_cleanup = 0
+_CLEANUP_INTERVAL = 60  # seconds between cleanup runs
+
+
 def cleanup_old_sessions():
-    """Remove session directories older than TTL."""
+    """Remove session directories older than TTL. Throttled to run at most once per minute."""
+    global _last_cleanup
     now = time.time()
+    if now - _last_cleanup < _CLEANUP_INTERVAL:
+        return
+    _last_cleanup = now
     for base in (UPLOAD_DIR, OUTPUT_DIR):
         if not os.path.exists(base):
             continue
-        for name in os.listdir(base):
+        try:
+            entries = os.listdir(base)
+        except OSError:
+            continue
+        for name in entries:
             path = os.path.join(base, name)
-            if (
-                os.path.isdir(path)
-                and now - os.path.getmtime(path) > SESSION_TTL_SECONDS
-            ):
-                shutil.rmtree(path, ignore_errors=True)
+            try:
+                if (
+                    os.path.isdir(path)
+                    and now - os.path.getmtime(path) > SESSION_TTL_SECONDS
+                ):
+                    shutil.rmtree(path, ignore_errors=True)
+            except OSError:
+                pass  # directory may have been removed by concurrent request
 
 
 @app.route("/")
@@ -166,7 +197,7 @@ def segment(session_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    gc.collect()
+    _cleanup_memory()
 
     return jsonify(
         {
@@ -301,14 +332,16 @@ def download_all(session_id):
 
     rendered = []
     workers = min(os.cpu_count() or 4, cfg["render_workers"])
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_render_one, idx): idx for idx in indices}
-        for future in as_completed(futures):
-            result = future.result()
-            if result is not None:
-                rendered.append(result)
-
-    del image_array
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_render_one, idx): idx for idx in indices}
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    rendered.append(result)
+    finally:
+        del image_array
+        _cleanup_memory()
 
     if not rendered:
         shutil.rmtree(render_dir, ignore_errors=True)
@@ -321,7 +354,7 @@ def download_all(session_id):
 
     # Free disk space and memory
     shutil.rmtree(render_dir, ignore_errors=True)
-    gc.collect()
+    _cleanup_memory()
 
     @after_this_request
     def _cleanup_zip(response):
@@ -331,11 +364,18 @@ def download_all(session_id):
             pass
         return response
 
+    # Build descriptive download name
+    if slide:
+        download_name = f"{slide}_segments_{upscale}x.zip"
+    else:
+        image_path_base = os.path.splitext(os.path.basename(image_path))[0]
+        download_name = f"{image_path_base}_segments_{upscale}x.zip"
+
     return send_file(
         zip_path,
         mimetype="application/zip",
         as_attachment=True,
-        download_name="stickers.zip",
+        download_name=download_name,
     )
 
 
@@ -372,7 +412,15 @@ def upload_pdf():
     img_fmt = cfg["pdf_image_format"]
     images_dir = os.path.join(IMAGES_DIR, pdf_name)
 
-    total_pages = get_pdf_page_count(pdf_path)
+    try:
+        total_pages = get_pdf_page_count(pdf_path)
+    except Exception:
+        shutil.rmtree(session_upload_dir, ignore_errors=True)
+        return jsonify({"error": "Could not read PDF. The file may be corrupted or password-protected."}), 400
+
+    if total_pages == 0:
+        shutil.rmtree(session_upload_dir, ignore_errors=True)
+        return jsonify({"error": "PDF has no pages."}), 400
 
     # Check cache
     cached = False
@@ -389,7 +437,11 @@ def upload_pdf():
 
     if not cached:
         os.makedirs(images_dir, exist_ok=True)
-        pdf_to_images(pdf_path, images_dir, dpi=dpi, fmt=img_fmt)
+        try:
+            pdf_to_images(pdf_path, images_dir, dpi=dpi, fmt=img_fmt)
+        except Exception as e:
+            shutil.rmtree(session_upload_dir, ignore_errors=True)
+            return jsonify({"error": f"Failed to convert PDF: {e}"}), 500
         conversion_info = {
             "dpi": dpi,
             "page_count": total_pages,
@@ -418,7 +470,7 @@ def upload_pdf():
             if thumb_scale < 1.0:
                 thumb = img.resize(
                     (max(1, int(w * thumb_scale)), max(1, int(h * thumb_scale))),
-                    Image.LANCZOS,
+                    Image.BILINEAR,
                 )
             else:
                 thumb = img.copy()
@@ -437,7 +489,7 @@ def upload_pdf():
     with open(os.path.join(session_output_dir, "pdf_session.json"), "w") as f:
         json.dump(pdf_session, f, indent=2)
 
-    gc.collect()
+    _cleanup_memory()
 
     return jsonify({
         "session_id": session_id,
@@ -493,7 +545,7 @@ def segment_slide(session_id, slide_index):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    gc.collect()
+    _cleanup_memory()
 
     return jsonify({
         "session_id": session_id,
@@ -617,6 +669,28 @@ def browse_run(run_name):
             "pdf_name": run_name,
             "slides": slides,
         })
+
+
+@app.route("/browse/slide-image/<run_name>/<slide_name>")
+def browse_slide_image(run_name, slide_name):
+    """Serve a slide thumbnail from cached images for browse mode."""
+    if not _safe_component(run_name) or not _safe_component(slide_name):
+        return jsonify({"error": "Invalid path"}), 400
+    run_path = os.path.join(SEGMENTS_DIR, run_name)
+    info_path = os.path.join(run_path, "run_info.json")
+    if not os.path.exists(info_path):
+        return jsonify({"error": "Run not found"}), 404
+    with open(info_path) as f:
+        info = json.load(f)
+    images_dir = info.get("images_dir", "")
+    if not images_dir or not os.path.isdir(images_dir):
+        return jsonify({"error": "Images not found"}), 404
+    # Try common extensions
+    for ext in ("png", "jpg", "jpeg"):
+        img_path = os.path.join(images_dir, f"{slide_name}.{ext}")
+        if os.path.exists(img_path):
+            return send_file(img_path, mimetype=f"image/{ext}")
+    return jsonify({"error": "Slide image not found"}), 404
 
 
 @app.route("/browse/run/<run_name>/<slide_name>")

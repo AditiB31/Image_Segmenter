@@ -357,8 +357,10 @@ Examples:
         "total_segments": total_segments,
     }
     summary_path = os.path.join(run_dir, "run_info.json")
-    with open(summary_path, "w") as f:
+    tmp_path = summary_path + ".tmp"
+    with open(tmp_path, "w") as f:
         json.dump(summary, f, indent=2)
+    os.replace(tmp_path, summary_path)
     print(f"Summary saved to {summary_path}")
 
 

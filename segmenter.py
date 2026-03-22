@@ -69,15 +69,43 @@ class ImageSegmenter:
         return torch.device("cpu")
 
     def _deduplicate_masks(self, masks, iou_thresh=None):
-        """Remove near-duplicate masks (IoU > threshold). Keeps first (larger) one."""
+        """Remove near-duplicate masks (IoU > threshold). Keeps first (larger) one.
+
+        Uses spatial grid bucketing for O(n*k) average performance instead of O(n²),
+        where k is the average number of overlapping masks per cell.
+        """
         if iou_thresh is None:
             iou_thresh = cfg["iou_dedup_thresh"]
+        if len(masks) <= 1:
+            return masks
+
+        # Spatial grid: divide image into cells, index kept masks by cell
+        cell_size = 64
+        grid = {}  # (cx, cy) -> list of indices into `keep`
+
+        def _bbox_cells(bbox):
+            """Yield grid cells that this bbox overlaps."""
+            x0, y0 = int(bbox[0]) // cell_size, int(bbox[1]) // cell_size
+            x1 = int(bbox[0] + bbox[2]) // cell_size
+            y1 = int(bbox[1] + bbox[3]) // cell_size
+            for gx in range(x0, x1 + 1):
+                for gy in range(y0, y1 + 1):
+                    yield (gx, gy)
+
         keep = []
         for mask in masks:
             seg = mask["segmentation"]
             bbox = mask["bbox"]
             is_dup = False
-            for kept in keep:
+
+            # Only check masks in overlapping grid cells
+            candidate_indices = set()
+            for cell in _bbox_cells(bbox):
+                if cell in grid:
+                    candidate_indices.update(grid[cell])
+
+            for ki in candidate_indices:
+                kept = keep[ki]
                 kbbox = kept["bbox"]
                 ix = max(bbox[0], kbbox[0])
                 iy = max(bbox[1], kbbox[1])
@@ -88,7 +116,6 @@ class ImageSegmenter:
                 bbox_overlap = (ir - ix) * (ib - iy)
                 if bbox_overlap / (bbox[2] * bbox[3] + 1e-6) < 0.3:
                     continue
-                # Pixel IoU cropped to bbox intersection (avoids full-frame ops)
                 r0, r1, c0, c1 = int(iy), int(ib), int(ix), int(ir)
                 inter = np.logical_and(
                     seg[r0:r1, c0:c1], kept["segmentation"][r0:r1, c0:c1]
@@ -98,7 +125,10 @@ class ImageSegmenter:
                     is_dup = True
                     break
             if not is_dup:
+                idx = len(keep)
                 keep.append(mask)
+                for cell in _bbox_cells(bbox):
+                    grid.setdefault(cell, []).append(idx)
         return keep
 
     def segment(self, image_path, output_dir, min_area=None, max_dim=None):
@@ -238,12 +268,12 @@ class ImageSegmenter:
             thumb_img = Image.fromarray(thumb_rgba, "RGBA")
             del thumb_rgba
 
-            # Resize thumbnail
+            # Resize thumbnail (BILINEAR is 2-3x faster than LANCZOS, fine for previews)
             t_scale = min(thumb_max / tw, thumb_max / th, 1.0)
             if t_scale < 1.0:
                 thumb_img = thumb_img.resize(
                     (max(1, int(tw * t_scale)), max(1, int(th * t_scale))),
-                    Image.LANCZOS,
+                    Image.BILINEAR,
                 )
 
             thumb_name = f"segment_{idx:03d}.png"
@@ -269,15 +299,18 @@ class ImageSegmenter:
         del thumb_source, inference_image
         gc.collect()
 
-        # Persist metadata for deferred rendering
+        # Persist metadata for deferred rendering (atomic write via temp + rename)
         meta = {
             "scale": scale,
             "orig_w": orig_w,
             "orig_h": orig_h,
             "segments": results,
         }
-        with open(os.path.join(masks_dir, "meta.json"), "w") as f:
+        meta_path = os.path.join(masks_dir, "meta.json")
+        tmp_path = meta_path + ".tmp"
+        with open(tmp_path, "w") as f:
             json.dump(meta, f)
+        os.replace(tmp_path, meta_path)
 
         if self.device.type == "mps":
             torch.mps.empty_cache()
@@ -338,10 +371,15 @@ class ImageSegmenter:
 
         # ── Morphological cleanup ────────────────────────────────────────────
         # Remove isolated noise pixels (1-2px) that SAM sometimes produces at
-        # mask boundaries before contour extraction.
+        # mask boundaries.  Adaptive: skip for small segments where MORPH_OPEN
+        # would destroy thin structures (text, lines in presentation graphics).
         ks = cfg["morph_kernel_size"]
         morph_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
-        mask_inf = cv2.morphologyEx(mask_inf, cv2.MORPH_OPEN, morph_k)
+        mask_area = np.count_nonzero(mask_inf)
+        if mask_area > 800:  # only clean masks large enough to survive erosion
+            # Close first to fill small holes, then open to remove noise
+            mask_inf = cv2.morphologyEx(mask_inf, cv2.MORPH_CLOSE, morph_k)
+            mask_inf = cv2.morphologyEx(mask_inf, cv2.MORPH_OPEN, morph_k)
 
         # ── Contour-based boundary smoothing at inference resolution ──────────
         #
@@ -365,12 +403,17 @@ class ImageSegmenter:
             main = max(contours, key=cv2.contourArea)
             pts = main[:, 0, :].astype(np.float64)  # (N, 2)
 
-            # Sigma spans ~1-3% of the perimeter — enough to damp the
-            # pixel-level rasterization noise in SAM's binary mask without
-            # reshaping corners or curves of the actual object.
+            # Compactness-aware sigma: compact shapes (circles) need less
+            # smoothing; complex shapes (text, irregular edges) need more
+            # careful treatment.  Uses the isoperimetric ratio to scale.
+            perimeter = len(pts)
+            compactness = (4 * np.pi * mask_area) / (perimeter * perimeter + 1e-6)
+            # compactness ~1.0 for circles, ~0.1 for very jagged shapes
+            base_sigma = perimeter / cfg["contour_sigma_divisor"]
+            # Reduce sigma for complex shapes to preserve detail
             sigma = max(
                 cfg["contour_sigma_min"],
-                min(len(pts) / cfg["contour_sigma_divisor"], cfg["contour_sigma_max"]),
+                min(base_sigma * min(compactness * 2.0, 1.0), cfg["contour_sigma_max"]),
             )
             ks = int(6 * sigma) | 1  # kernel size (always odd)
             pad = ks // 2  # circular wrap-around padding
@@ -391,14 +434,19 @@ class ImageSegmenter:
             cv2.drawContours(mask_inf, [smooth_pts], -1, 255, cv2.FILLED)
 
         # ── Upscale to full resolution ────────────────────────────────────────
-        # LANCZOS produces a smooth grey gradient at the boundary; we threshold
-        # at 127 later via the Gaussian blur step rather than here, so we keep
-        # the full float range coming out of LANCZOS.
+        # Use CUBIC interpolation for smooth upscaling, then apply sigmoid-like
+        # sharpening to tighten the edge and prevent grey fringe/halo artifacts
+        # that LANCZOS creates on binary mask boundaries.
         if scale != 1.0:
-            mask_pil = Image.fromarray(mask_inf, "L")
-            mask_pil = mask_pil.resize((fw, fh), Image.LANCZOS)
-            full_mask_np = np.array(mask_pil)
-            mask_pil.close()
+            full_mask_np = cv2.resize(
+                mask_inf, (fw, fh), interpolation=cv2.INTER_CUBIC
+            )
+            # Sigmoid sharpening: push grey fringe pixels toward 0 or 255
+            # to create a crisp but anti-aliased edge
+            mid = 127.5
+            sharpness = cfg.get("mask_upscale_sharpness", 0.08)
+            mask_float = 1.0 / (1.0 + np.exp(-(full_mask_np.astype(np.float32) - mid) * sharpness))
+            full_mask_np = (mask_float * 255).astype(np.uint8)
         else:
             full_mask_np = mask_inf
 
@@ -423,8 +471,8 @@ class ImageSegmenter:
         # Distance transform computes exact distance from each pixel to the
         # nearest background pixel, producing a smooth alpha gradient that
         # follows the contour shape precisely.  The feather radius scales
-        # with segment size so small icons get a tight edge and large photos
-        # get a proportionally wider falloff.
+        # with segment size and output resolution so the visual edge width
+        # stays consistent across upscale factors.
         binary_mask = (full_mask_np > 127).astype(np.uint8)
         del full_mask_np
         dist = cv2.distanceTransform(
@@ -466,10 +514,20 @@ class ImageSegmenter:
                 segment_img = segment_img.crop(crop_box)
             del alpha_arr
 
-        # Upscale for sticker-quality output
+        # Upscale for sticker-quality output.  Re-apply light feathering at
+        # upscaled resolution so edges stay crisp at the target size.
         if upscale > 1:
             new_size = (segment_img.width * upscale, segment_img.height * upscale)
             segment_img = segment_img.resize(new_size, Image.LANCZOS)
+            # Scale blur to upscale factor for consistent edge appearance
+            scaled_blur_k = max(1, int(blur_k * upscale) | 1)  # keep odd
+            scaled_blur_s = blur_s * upscale
+            if scaled_blur_k > 1 and scaled_blur_s > 0:
+                alpha_arr = np.array(segment_img.split()[-1])
+                alpha_arr = cv2.GaussianBlur(
+                    alpha_arr, (scaled_blur_k, scaled_blur_k), sigmaX=scaled_blur_s
+                )
+                segment_img.putalpha(Image.fromarray(alpha_arr, "L"))
 
         if out_path is None:
             filename = f"segment_{index:03d}.png"
