@@ -394,6 +394,8 @@ def download_all(session_id):
 @app.route("/original-image/<session_id>")
 def original_image(session_id):
     """Serve the original uploaded image for the annotation canvas."""
+    if not _safe_component(session_id):
+        return jsonify({"error": "Invalid session"}), 400
     image_path = _get_image_path(session_id)
     if image_path is None:
         return jsonify({"error": "Session not found"}), 404
@@ -403,6 +405,8 @@ def original_image(session_id):
 @app.route("/annotate/<session_id>", methods=["POST"])
 def annotate(session_id):
     """Run SAM prediction with user-provided point/box/contour prompts."""
+    if not _safe_component(session_id):
+        return jsonify({"error": "Invalid session"}), 400
     cleanup_old_sessions()
 
     image_path = _get_image_path(session_id)

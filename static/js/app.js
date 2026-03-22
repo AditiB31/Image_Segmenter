@@ -240,6 +240,11 @@ startOverBtn.addEventListener("click", () => {
         loadRuns();
         return;
     }
+    // If coming from manual annotation, go back to mode choice
+    if (currentMode === "image" && currentUploadData) {
+        showModeChoice(currentUploadData);
+        return;
+    }
     switchMode(currentMode);
 });
 
@@ -908,8 +913,19 @@ function setupAnnotateCanvas() {
         resizeAnnotateCanvas();
         redrawAnnotateCanvas();
     };
+    img.onerror = () => {
+        showToast("Failed to load image for annotation.");
+        showModeChoice(currentUploadData);
+    };
     img.src = `/original-image/${currentSessionId}`;
 }
+
+window.addEventListener("resize", debounce(() => {
+    if (!annotateSection.hidden && annotateImage) {
+        resizeAnnotateCanvas();
+        redrawAnnotateCanvas();
+    }
+}, 150));
 
 function resizeAnnotateCanvas() {
     if (!annotateImage) return;
@@ -1004,8 +1020,8 @@ annotateCanvas.addEventListener("click", (e) => {
         // Close polygon when clicking near first vertex
         if (currentPrompt.contour.length >= 3) {
             const first = currentPrompt.contour[0];
-            const dist = Math.hypot((first.x - origX) * annotateScale, (first.y - origY) * annotateScale);
-            if (dist < 12) {
+            const displayDist = Math.hypot((first.x - origX) * annotateScale, (first.y - origY) * annotateScale);
+            if (displayDist < 14) {
                 currentPrompt.contourClosed = true;
                 redrawAnnotateCanvas();
                 return;
@@ -1123,6 +1139,16 @@ async function extractSegment() {
     if (!prompt.points && !prompt.contour && !prompt.box) {
         showToast("Add annotations first (click points, draw polygon, or draw box).");
         return;
+    }
+
+    // Validate box is large enough
+    if (prompt.box && !prompt.points && !prompt.contour) {
+        const bw = Math.abs(prompt.box[2] - prompt.box[0]);
+        const bh = Math.abs(prompt.box[3] - prompt.box[1]);
+        if (bw < 5 || bh < 5) {
+            showToast("Box too small. Draw a larger area.");
+            return;
+        }
     }
 
     const extractBtn = document.getElementById("annotate-extract-btn");
