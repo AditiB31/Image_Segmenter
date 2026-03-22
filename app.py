@@ -161,15 +161,6 @@ def segment_image(session_id, filename):
     return send_from_directory(thumbs_dir, filename, mimetype="image/png")
 
 
-@app.route("/preview/<session_id>")
-def preview(session_id):
-    """Serve the original uploaded image for preview."""
-    image_path = _get_image_path(session_id)
-    if image_path is None:
-        return jsonify({"error": "Session not found"}), 404
-    return send_file(image_path)
-
-
 @app.route("/download/<session_id>/<filename>")
 def download(session_id, filename):
     """Render full-res segment on demand and serve it."""
@@ -232,16 +223,16 @@ def download_all(session_id):
     os.makedirs(render_dir, exist_ok=True)
 
     def _render_one(idx):
-        fname = f"segment_{idx:03d}.png"
-        opath = os.path.join(render_dir, fname)
-        if not os.path.exists(opath):
+        filename = f"segment_{idx:03d}.png"
+        out_path = os.path.join(render_dir, filename)
+        if not os.path.exists(out_path):
             result = segmenter.render_segment(
                 image_path, session_output_dir, idx,
-                meta=meta, upscale=upscale, out_path=opath,
+                meta=meta, upscale=upscale, out_path=out_path,
             )
             if result is None:
                 return None
-        return (opath, fname)
+        return (out_path, filename)
 
     rendered = []
     workers = min(os.cpu_count() or 4, 6)
@@ -249,7 +240,7 @@ def download_all(session_id):
         futures = {pool.submit(_render_one, idx): idx for idx in indices}
         for future in as_completed(futures):
             result = future.result()
-            if result:
+            if result is not None:
                 rendered.append(result)
 
     if not rendered:
@@ -257,7 +248,7 @@ def download_all(session_id):
         return jsonify({"error": "No segments could be rendered"}), 404
 
     zip_path = os.path.join(session_output_dir, f"segments_{upscale}x.zip")
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
         for path, fname in rendered:
             zf.write(path, fname)
 

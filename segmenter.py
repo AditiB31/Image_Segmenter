@@ -76,7 +76,6 @@ class ImageSegmenter:
             is_dup = False
             for kept in keep:
                 kbbox = kept["bbox"]
-                # Quick bounding-box overlap check before expensive pixel IoU
                 ix = max(bbox[0], kbbox[0])
                 iy = max(bbox[1], kbbox[1])
                 ir = min(bbox[0] + bbox[2], kbbox[0] + kbbox[2])
@@ -86,10 +85,13 @@ class ImageSegmenter:
                 bbox_overlap = (ir - ix) * (ib - iy)
                 if bbox_overlap / (bbox[2] * bbox[3] + 1e-6) < 0.3:
                     continue
-                # Pixel-level IoU
-                intersection = np.logical_and(seg, kept["segmentation"]).sum()
-                union = np.logical_or(seg, kept["segmentation"]).sum()
-                if union > 0 and intersection / union > iou_thresh:
+                # Pixel IoU cropped to bbox intersection (avoids full-frame ops)
+                r0, r1, c0, c1 = int(iy), int(ib), int(ix), int(ir)
+                inter = np.logical_and(
+                    seg[r0:r1, c0:c1], kept["segmentation"][r0:r1, c0:c1]
+                ).sum()
+                union = mask["area"] + kept["area"] - inter
+                if union > 0 and inter / union > iou_thresh:
                     is_dup = True
                     break
             if not is_dup:
@@ -159,7 +161,7 @@ class ImageSegmenter:
             del m["segmentation"]
         masks = masks[:200]
 
-        # Remove near-duplicate masks (IoU > 0.9)
+        # SAM can produce near-identical masks from overlapping point prompts
         masks = self._deduplicate_masks(masks)
 
         results = []
@@ -391,7 +393,5 @@ class ImageSegmenter:
 
         segment_img.save(out_path, optimize=True)
         segment_img.close()
-        del segment_img
-        gc.collect()
 
         return out_path

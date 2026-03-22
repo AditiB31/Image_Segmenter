@@ -298,9 +298,10 @@ function updateVisibleCount() {
 
 function sortSegments(criterion) {
     const cards = [...segmentsGrid.querySelectorAll(".segment-card")];
+    const segMap = new Map(allSegments.map((s) => [s.index, s]));
     cards.sort((a, b) => {
-        const aSeg = allSegments.find((s) => s.index === parseInt(a.dataset.index));
-        const bSeg = allSegments.find((s) => s.index === parseInt(b.dataset.index));
+        const aSeg = segMap.get(parseInt(a.dataset.index));
+        const bSeg = segMap.get(parseInt(b.dataset.index));
         if (!aSeg || !bSeg) return 0;
         switch (criterion) {
             case "area-desc": return bSeg.area - aSeg.area;
