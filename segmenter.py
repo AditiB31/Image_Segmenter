@@ -287,8 +287,15 @@ class ImageSegmenter:
 
     @staticmethod
     def render_segment(
-        image_path, output_dir, index, meta=None, upscale=None,
-        out_path=None, image_array=None, tight_crop=None, tight_crop_padding=None,
+        image_path,
+        output_dir,
+        index,
+        meta=None,
+        upscale=None,
+        out_path=None,
+        image_array=None,
+        tight_crop=None,
+        tight_crop_padding=None,
     ):
         """
         Render a single full-resolution RGBA PNG on demand.
@@ -325,7 +332,8 @@ class ImageSegmenter:
         mask_inf = (
             np.unpackbits(npz["mask"])[: shape[0] * shape[1]]
             .reshape(shape)
-            .astype(np.uint8) * 255
+            .astype(np.uint8)
+            * 255
         )
 
         # ── Morphological cleanup ────────────────────────────────────────────
@@ -354,17 +362,17 @@ class ImageSegmenter:
         )
         if contours:
             main = max(contours, key=cv2.contourArea)
-            pts = main[:, 0, :].astype(np.float64)   # (N, 2)
+            pts = main[:, 0, :].astype(np.float64)  # (N, 2)
 
             # Sigma spans ~1-3% of the perimeter — enough to damp the
             # pixel-level rasterization noise in SAM's binary mask without
             # reshaping corners or curves of the actual object.
             sigma = max(2.5, min(len(pts) / 180.0, 18.0))
-            ks = int(6 * sigma) | 1           # kernel size (always odd)
-            pad = ks // 2                     # circular wrap-around padding
+            ks = int(6 * sigma) | 1  # kernel size (always odd)
+            pad = ks // 2  # circular wrap-around padding
 
             t = np.arange(ks) - pad
-            kernel = np.exp(-0.5 * t ** 2 / sigma ** 2)
+            kernel = np.exp(-0.5 * t**2 / sigma**2)
             kernel /= kernel.sum()
 
             smooth = np.empty_like(pts)
@@ -393,7 +401,7 @@ class ImageSegmenter:
         # ── RGBA assembly ────────────────────────────────────────────────────
         if image_array is not None:
             # Batch path: image already loaded as numpy array (thread-safe read)
-            cropped_rgb = image_array[fy:fy + fh, fx:fx + fw].copy()
+            cropped_rgb = image_array[fy : fy + fh, fx : fx + fw].copy()
         else:
             original = Image.open(image_path).convert("RGB")
             cropped_rgb = np.array(original.crop((fx, fy, fx + fw, fy + fh)))

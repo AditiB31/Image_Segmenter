@@ -98,23 +98,33 @@ Examples:
     )
     parser.add_argument("pdf_path", help="Path to the PDF file")
     parser.add_argument(
-        "--dpi", type=int, default=None,
+        "--dpi",
+        type=int,
+        default=None,
         help=f"PDF render DPI (default: {cfg['pdf_dpi']})",
     )
     parser.add_argument(
-        "--min-area", type=int, default=None,
+        "--min-area",
+        type=int,
+        default=None,
         help=f"Min segment area in pixels (default: {cfg['min_area']})",
     )
     parser.add_argument(
-        "--max-dim", type=int, default=None,
+        "--max-dim",
+        type=int,
+        default=None,
         help=f"Max inference dimension (default: {cfg['max_dim']})",
     )
     parser.add_argument(
-        "--upscale", type=int, default=None,
+        "--upscale",
+        type=int,
+        default=None,
         help=f"Output upscale factor (default: {cfg['upscale']})",
     )
     parser.add_argument(
-        "--slides", type=str, default=None,
+        "--slides",
+        type=str,
+        default=None,
         help="Slide range, e.g. '1-5' or '3,7,10' (default: all)",
     )
     args = parser.parse_args()
@@ -168,13 +178,19 @@ Examples:
     total_pages = get_pdf_page_count(pdf_path)
     if args.slides:
         page_indices = parse_slide_range(args.slides, total_pages)
-        print(f"\nStep 1: Converting {len(page_indices)} selected slides (DPI={dpi})...")
+        print(
+            f"\nStep 1: Converting {len(page_indices)} selected slides (DPI={dpi})..."
+        )
     else:
         print(f"\nStep 1: Converting PDF to images (DPI={dpi})...")
 
     t0 = time.time()
     slide_paths = pdf_to_images(
-        pdf_path, images_dir, dpi=dpi, fmt=img_fmt, page_indices=page_indices,
+        pdf_path,
+        images_dir,
+        dpi=dpi,
+        fmt=img_fmt,
+        page_indices=page_indices,
     )
     print(f"  {len(slide_paths)} slides saved to {images_dir}")
     print(f"  Conversion time: {time.time() - t0:.1f}s")
@@ -194,9 +210,7 @@ Examples:
 
     for slide_idx, slide_path in enumerate(slide_paths):
         slide_name = os.path.splitext(os.path.basename(slide_path))[0]
-        seg_dir = os.path.join(
-            segments_base, f"{pdf_name}_{slide_name}_{timestamp}"
-        )
+        seg_dir = os.path.join(segments_base, f"{pdf_name}_{slide_name}_{timestamp}")
         os.makedirs(seg_dir, exist_ok=True)
 
         print(f"\n  [{slide_idx + 1}/{len(slide_paths)}] {slide_name}")
@@ -226,8 +240,12 @@ Examples:
             def _render_one(seg):
                 out = os.path.join(render_dir, seg["filename"])
                 ImageSegmenter.render_segment(
-                    slide_path, seg_dir, seg["index"],
-                    meta=meta, upscale=upscale, out_path=out,
+                    slide_path,
+                    seg_dir,
+                    seg["index"],
+                    meta=meta,
+                    upscale=upscale,
+                    out_path=out,
                     image_array=image_array,
                 )
 
@@ -238,15 +256,19 @@ Examples:
 
             del image_array
             render_time = time.time() - t2
-            print(f"    Rendered {len(segments)} segments at {upscale}x ({render_time:.1f}s)")
+            print(
+                f"    Rendered {len(segments)} segments at {upscale}x ({render_time:.1f}s)"
+            )
             print(f"    -> {render_dir}")
 
         total_segments += len(segments)
-        slide_results.append({
-            "slide": slide_name,
-            "segments": len(segments),
-            "output_dir": seg_dir,
-        })
+        slide_results.append(
+            {
+                "slide": slide_name,
+                "segments": len(segments),
+                "output_dir": seg_dir,
+            }
+        )
 
         # Free memory between slides
         gc.collect()

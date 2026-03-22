@@ -232,8 +232,12 @@ def download_all(session_id):
         out_path = os.path.join(render_dir, filename)
         if not os.path.exists(out_path):
             result = segmenter.render_segment(
-                image_path, session_output_dir, idx,
-                meta=meta, upscale=upscale, out_path=out_path,
+                image_path,
+                session_output_dir,
+                idx,
+                meta=meta,
+                upscale=upscale,
+                out_path=out_path,
                 image_array=image_array,
             )
             if result is None:
