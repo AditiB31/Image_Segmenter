@@ -68,7 +68,7 @@ thumb_max: 512
 feather_min_px: 2.0
 
 # Maximum feather radius in pixels.
-feather_max_px: 8.0
+feather_max_px: 5.0
 
 # Feather factor (proportion of the segment's smaller dimension).
 feather_factor: 0.012
@@ -110,6 +110,15 @@ tight_crop: true
 # Applied at pre-upscale resolution (so 4px becomes 8px at 2x upscale).
 # Range: 0–20. A small pad prevents content from touching the edge.
 tight_crop_padding: 4
+
+# ─── Sticker Mode Preset ──────────────────────────────────────────────
+# For the crispest sticker edges (minimal feathering), use these values:
+# feather_min_px: 1.0
+# feather_max_px: 3.0
+# feather_blur_kernel: 1
+# feather_blur_sigma: 0
+# contour_sigma_min: 1.5
+# contour_sigma_max: 10.0
 
 # ─── PDF Pipeline Settings ─────────────────────────────────────────────────
 

@@ -26,7 +26,7 @@ _DEFAULTS = {
     "thumb_max": 512,
     # Edge feathering
     "feather_min_px": 2.0,
-    "feather_max_px": 8.0,
+    "feather_max_px": 5.0,
     "feather_factor": 0.012,
     # Edge processing (advanced)
     "morph_kernel_size": 3,
