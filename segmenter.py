@@ -516,7 +516,9 @@ class ImageSegmenter:
 
             # Take best mask (highest confidence)
             best = int(np.argmax(scores))
-            mask = masks[best]
+            # SAM2ImagePredictor returns float32 masks; threshold to bool
+            # so np.packbits and other boolean ops work correctly.
+            mask = masks[best] > 0.5
 
             if not np.any(mask):
                 continue
