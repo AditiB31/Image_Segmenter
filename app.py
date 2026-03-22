@@ -13,6 +13,7 @@ import time
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 import numpy as np
 
@@ -84,6 +85,26 @@ def _get_image_path(session_id):
     session_upload_dir = os.path.join(UPLOAD_DIR, session_id)
     files = os.listdir(session_upload_dir) if os.path.isdir(session_upload_dir) else []
     return os.path.join(session_upload_dir, files[0]) if files else None
+
+
+def _resolve_slide_context(session_id, slide):
+    """Resolve image path and segment dir for a slide-based or image-based session.
+
+    Returns (image_path, seg_output_dir) or (None, None) if invalid.
+    """
+    session_output_dir = os.path.join(OUTPUT_DIR, session_id)
+    if slide:
+        if not _safe_component(slide):
+            return None, None
+        pdf_session = _load_pdf_session(session_id)
+        if pdf_session is None:
+            return None, None
+        image_path = os.path.join(pdf_session["images_dir"], f"{slide}.png")
+        seg_output_dir = os.path.join(session_output_dir, slide)
+    else:
+        image_path = _get_image_path(session_id)
+        seg_output_dir = session_output_dir
+    return image_path, seg_output_dir
 
 
 def _load_pdf_session(session_id):
@@ -236,20 +257,7 @@ def download(session_id, filename):
         return jsonify({"error": "Invalid filename"}), 400
 
     slide = request.args.get("slide")
-    if slide:
-        # Validate slide name to prevent directory traversal
-        if os.sep in slide or "/" in slide or ".." in slide:
-            return jsonify({"error": "Invalid slide name"}), 400
-        # PDF session: image is from cached slide images
-        pdf_session = _load_pdf_session(session_id)
-        if pdf_session is None:
-            return jsonify({"error": "PDF session not found"}), 404
-        image_path = os.path.join(pdf_session["images_dir"], f"{slide}.png")
-        seg_output_dir = os.path.join(session_output_dir, slide)
-    else:
-        image_path = _get_image_path(session_id)
-        seg_output_dir = session_output_dir
-
+    image_path, seg_output_dir = _resolve_slide_context(session_id, slide)
     if image_path is None or not os.path.exists(image_path):
         return jsonify({"error": "Original image not found"}), 404
 
@@ -282,20 +290,7 @@ def download_all(session_id):
     data = request.get_json(silent=True) or {}
     slide = data.get("slide")
 
-    # Resolve image path and segment output dir based on session type
-    if slide:
-        # Validate slide name to prevent directory traversal
-        if os.sep in slide or "/" in slide or ".." in slide:
-            return jsonify({"error": "Invalid slide name"}), 400
-        pdf_session = _load_pdf_session(session_id)
-        if pdf_session is None:
-            return jsonify({"error": "PDF session not found"}), 404
-        image_path = os.path.join(pdf_session["images_dir"], f"{slide}.png")
-        seg_output_dir = os.path.join(session_output_dir, slide)
-    else:
-        image_path = _get_image_path(session_id)
-        seg_output_dir = session_output_dir
-
+    image_path, seg_output_dir = _resolve_slide_context(session_id, slide)
     if image_path is None or not os.path.exists(image_path):
         return jsonify({"error": "Original image not found"}), 404
 
@@ -571,7 +566,7 @@ def upload_pdf():
             "dpi": dpi,
             "page_count": total_pages,
             "format": img_fmt,
-            "converted_at": __import__("datetime").datetime.now().isoformat(),
+            "converted_at": datetime.now().isoformat(),
             "pdf_name": pdf_name,
         }
         with open(os.path.join(images_dir, "conversion_info.json"), "w") as f:

@@ -145,6 +145,93 @@ class ImageSegmenter:
                     grid.setdefault(cell, []).append(idx)
         return keep
 
+    def _load_and_resize(self, image_path, max_dim):
+        """Load an image and resize for inference if needed.
+
+        Returns (inference_image, orig_w, orig_h, scale).
+        """
+        with Image.open(image_path) as original:
+            original = original.convert("RGB")
+            orig_w, orig_h = original.size
+
+            scale = 1.0
+            if max(orig_w, orig_h) > max_dim:
+                scale = max_dim / max(orig_w, orig_h)
+                new_w = int(orig_w * scale)
+                new_h = int(orig_h * scale)
+                inference_image = np.array(original.resize((new_w, new_h), Image.LANCZOS))
+            else:
+                inference_image = np.array(original)
+        return inference_image, orig_w, orig_h, scale
+
+    def _run_with_autocast(self, fn):
+        """Run fn() with MPS float16 autocast if available, falling back to float32."""
+        with torch.inference_mode():
+            if self.device.type == "mps":
+                try:
+                    with torch.autocast("mps", dtype=torch.float16):
+                        return fn()
+                except RuntimeError:
+                    return fn()
+            else:
+                return fn()
+
+    def _make_thumbnail(self, rgb_crop, mask_crop, thumbs_dir, idx, thumb_max):
+        """Generate and save a thumbnail from an RGB crop and mask crop."""
+        th, tw = rgb_crop.shape[:2]
+        thumb_rgba = np.empty((th, tw, 4), dtype=np.uint8)
+        thumb_rgba[:, :, :3] = rgb_crop
+        thumb_rgba[:, :, 3] = mask_crop.astype(np.uint8) * 255
+
+        thumb_img = Image.fromarray(thumb_rgba, "RGBA")
+        del thumb_rgba
+
+        t_scale = min(thumb_max / tw, thumb_max / th, 1.0)
+        if t_scale < 1.0:
+            thumb_img = thumb_img.resize(
+                (max(1, int(tw * t_scale)), max(1, int(th * t_scale))),
+                Image.BILINEAR,
+            )
+
+        thumb_name = f"segment_{idx:03d}.png"
+        thumb_img.save(os.path.join(thumbs_dir, thumb_name))
+        thumb_img.close()
+        return thumb_name
+
+    @staticmethod
+    def _compute_full_bbox(bbox, scale, orig_w, orig_h):
+        """Convert inference-resolution bbox to full-resolution coordinates.
+
+        Returns (fx, fy, fw, fh) or None if degenerate.
+        """
+        inf_x = max(0, int(bbox[0]))
+        inf_y = max(0, int(bbox[1]))
+        inf_w = int(bbox[2])
+        inf_h = int(bbox[3])
+
+        if scale != 1.0:
+            fx = max(0, round(inf_x / scale))
+            fy = max(0, round(inf_y / scale))
+            fw = min(round(inf_w / scale), orig_w - fx)
+            fh = min(round(inf_h / scale), orig_h - fy)
+        else:
+            fx, fy, fw, fh = inf_x, inf_y, inf_w, inf_h
+            fw = min(fw, orig_w - fx)
+            fh = min(fh, orig_h - fy)
+
+        if fw <= 0 or fh <= 0:
+            return None
+        return (fx, fy, fw, fh)
+
+    @staticmethod
+    def _save_meta(masks_dir, meta):
+        """Atomically write meta.json via tmp + rename."""
+        meta_path = os.path.join(masks_dir, "meta.json")
+        tmp_path = meta_path + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(meta, f)
+        os.replace(tmp_path, meta_path)
+
     def segment(self, image_path, output_dir, min_area=None, max_dim=None):
         """
         Detect all masks and save compact data for deferred rendering.
@@ -173,33 +260,12 @@ class ImageSegmenter:
         os.makedirs(masks_dir, exist_ok=True)
         os.makedirs(thumbs_dir, exist_ok=True)
 
-        with Image.open(image_path) as original:
-            original = original.convert("RGB")
-            orig_w, orig_h = original.size
-
-            # Resize for inference if needed
-            scale = 1.0
-            if max(orig_w, orig_h) > max_dim:
-                scale = max_dim / max(orig_w, orig_h)
-                new_w = int(orig_w * scale)
-                new_h = int(orig_h * scale)
-                inference_image = np.array(original.resize((new_w, new_h), Image.LANCZOS))
-            else:
-                inference_image = np.array(original)
+        inference_image, orig_w, orig_h, scale = self._load_and_resize(image_path, max_dim)
         thumb_source = inference_image
 
-        with torch.inference_mode():
-            # Float16 autocast on Apple Silicon — ~2x faster, same quality
-            # (sensitive ops like softmax stay float32 automatically)
-            if self.device.type == "mps":
-                try:
-                    with torch.autocast("mps", dtype=torch.float16):
-                        all_masks = self.mask_generator.generate(inference_image)
-                except RuntimeError:
-                    # Fall back to float32 if MPS autocast fails
-                    all_masks = self.mask_generator.generate(inference_image)
-            else:
-                all_masks = self.mask_generator.generate(inference_image)
+        all_masks = self._run_with_autocast(
+            lambda: self.mask_generator.generate(inference_image)
+        )
 
         # Free GPU memory immediately
         if self.device.type == "mps":
@@ -298,54 +364,24 @@ class ImageSegmenter:
                 del mask_data["segmentation"]
                 continue
 
-            # Crop mask at inference resolution (compact)
             mask_crop = seg_mask[inf_y:inf_b, inf_x:inf_r]
 
-            # Compute full-res bbox (round for sub-pixel accuracy)
-            if scale != 1.0:
-                fx = max(0, round(bbox[0] / scale))
-                fy = max(0, round(bbox[1] / scale))
-                fw = min(round(bbox[2] / scale), orig_w - fx)
-                fh = min(round(bbox[3] / scale), orig_h - fy)
-            else:
-                fx, fy, fw, fh = inf_x, inf_y, inf_w, inf_h
-                fw = min(fw, orig_w - fx)
-                fh = min(fh, orig_h - fy)
-
-            if fw <= 0 or fh <= 0:
+            full_bbox = self._compute_full_bbox(bbox, scale, orig_w, orig_h)
+            if full_bbox is None:
                 del mask_data["segmentation"]
                 continue
+            fx, fy, fw, fh = full_bbox
 
             actual_area = int(np.count_nonzero(mask_crop) * inv_scale_sq)
 
-            # Save compact mask crop
             np.savez_compressed(
                 os.path.join(masks_dir, f"{idx}.npz"),
                 mask=np.packbits(mask_crop),
                 shape=np.array(mask_crop.shape, dtype=np.int32),
             )
 
-            # Generate small thumbnail from inference-res data
             thumb_rgb = thumb_source[inf_y:inf_b, inf_x:inf_r]
-            th, tw = thumb_rgb.shape[:2]
-            thumb_rgba = np.empty((th, tw, 4), dtype=np.uint8)
-            thumb_rgba[:, :, :3] = thumb_rgb
-            thumb_rgba[:, :, 3] = mask_crop.astype(np.uint8) * 255
-
-            thumb_img = Image.fromarray(thumb_rgba, "RGBA")
-            del thumb_rgba
-
-            # Resize thumbnail (BILINEAR is 2-3x faster than LANCZOS, fine for previews)
-            t_scale = min(thumb_max / tw, thumb_max / th, 1.0)
-            if t_scale < 1.0:
-                thumb_img = thumb_img.resize(
-                    (max(1, int(tw * t_scale)), max(1, int(th * t_scale))),
-                    Image.BILINEAR,
-                )
-
-            thumb_name = f"segment_{idx:03d}.png"
-            thumb_img.save(os.path.join(thumbs_dir, thumb_name))
-            thumb_img.close()
+            thumb_name = self._make_thumbnail(thumb_rgb, mask_crop, thumbs_dir, idx, thumb_max)
 
             del mask_data["segmentation"]
             del mask_crop
@@ -366,19 +402,13 @@ class ImageSegmenter:
         del thumb_source, inference_image
         gc.collect()
 
-        # Persist metadata for deferred rendering (atomic write via temp + rename)
-        meta = {
+        self._save_meta(masks_dir, {
             "scale": scale,
             "orig_w": orig_w,
             "orig_h": orig_h,
             "settings": {"min_area": min_area, "max_dim": max_dim},
             "segments": results,
-        }
-        meta_path = os.path.join(masks_dir, "meta.json")
-        tmp_path = meta_path + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(meta, f)
-        os.replace(tmp_path, meta_path)
+        })
 
         if self.device.type == "mps":
             torch.mps.empty_cache()
@@ -423,31 +453,10 @@ class ImageSegmenter:
             existing_segments = []
             start_idx = 0
 
-        with Image.open(image_path) as original:
-            original = original.convert("RGB")
-            orig_w, orig_h = original.size
-
-            scale = 1.0
-            if max(orig_w, orig_h) > max_dim:
-                scale = max_dim / max(orig_w, orig_h)
-                new_w = int(orig_w * scale)
-                new_h = int(orig_h * scale)
-                inference_image = np.array(
-                    original.resize((new_w, new_h), Image.LANCZOS)
-                )
-            else:
-                inference_image = np.array(original)
+        inference_image, orig_w, orig_h, scale = self._load_and_resize(image_path, max_dim)
 
         # Set image on predictor (computes embeddings once)
-        with torch.inference_mode():
-            if self.device.type == "mps":
-                try:
-                    with torch.autocast("mps", dtype=torch.float16):
-                        self.predictor.set_image(inference_image)
-                except RuntimeError:
-                    self.predictor.set_image(inference_image)
-            else:
-                self.predictor.set_image(inference_image)
+        self._run_with_autocast(lambda: self.predictor.set_image(inference_image))
 
         results = []
 
@@ -500,24 +509,12 @@ class ImageSegmenter:
             if len(predict_kwargs) <= 1:
                 continue  # no valid prompts
 
-            with torch.inference_mode():
-                if self.device.type == "mps":
-                    try:
-                        with torch.autocast("mps", dtype=torch.float16):
-                            masks, scores, _ = self.predictor.predict(
-                                **predict_kwargs
-                            )
-                    except RuntimeError:
-                        masks, scores, _ = self.predictor.predict(
-                            **predict_kwargs
-                        )
-                else:
-                    masks, scores, _ = self.predictor.predict(**predict_kwargs)
+            masks, scores, _ = self._run_with_autocast(
+                lambda: self.predictor.predict(**predict_kwargs)
+            )
 
             # Take best mask (highest confidence)
             best = int(np.argmax(scores))
-            # SAM2ImagePredictor returns float32 masks; threshold to bool
-            # so np.packbits and other boolean ops work correctly.
             mask = masks[best] > 0.5
 
             if not np.any(mask):
@@ -533,52 +530,25 @@ class ImageSegmenter:
             inf_w = int(cmax - cmin + 1)
             inf_h = int(rmax - rmin + 1)
 
-            if scale != 1.0:
-                fx = max(0, round(inf_x / scale))
-                fy = max(0, round(inf_y / scale))
-                fw = min(round(inf_w / scale), orig_w - fx)
-                fh = min(round(inf_h / scale), orig_h - fy)
-            else:
-                fx, fy, fw, fh = inf_x, inf_y, inf_w, inf_h
-                fw = min(fw, orig_w - fx)
-                fh = min(fh, orig_h - fy)
-
-            if fw <= 0 or fh <= 0:
+            full_bbox = self._compute_full_bbox(
+                [inf_x, inf_y, inf_w, inf_h], scale, orig_w, orig_h
+            )
+            if full_bbox is None:
                 continue
+            fx, fy, fw, fh = full_bbox
 
             mask_crop = mask[inf_y:inf_y + inf_h, inf_x:inf_x + inf_w]
             inv_scale_sq = 1.0 / (scale * scale) if scale != 1.0 else 1.0
             actual_area = int(np.count_nonzero(mask_crop) * inv_scale_sq)
 
-            # Save compact mask crop
             np.savez_compressed(
                 os.path.join(masks_dir, f"{idx}.npz"),
                 mask=np.packbits(mask_crop),
                 shape=np.array(mask_crop.shape, dtype=np.int32),
             )
 
-            # Generate thumbnail
-            thumb_rgb = inference_image[
-                inf_y:inf_y + inf_h, inf_x:inf_x + inf_w
-            ]
-            th, tw = thumb_rgb.shape[:2]
-            thumb_rgba = np.empty((th, tw, 4), dtype=np.uint8)
-            thumb_rgba[:, :, :3] = thumb_rgb
-            thumb_rgba[:, :, 3] = mask_crop.astype(np.uint8) * 255
-
-            thumb_img = Image.fromarray(thumb_rgba, "RGBA")
-            del thumb_rgba
-
-            t_scale = min(thumb_max / tw, thumb_max / th, 1.0)
-            if t_scale < 1.0:
-                thumb_img = thumb_img.resize(
-                    (max(1, int(tw * t_scale)), max(1, int(th * t_scale))),
-                    Image.BILINEAR,
-                )
-
-            thumb_name = f"segment_{idx:03d}.png"
-            thumb_img.save(os.path.join(thumbs_dir, thumb_name))
-            thumb_img.close()
+            thumb_rgb = inference_image[inf_y:inf_y + inf_h, inf_x:inf_x + inf_w]
+            thumb_name = self._make_thumbnail(thumb_rgb, mask_crop, thumbs_dir, idx, thumb_max)
 
             del mask_crop
 
@@ -604,17 +574,13 @@ class ImageSegmenter:
 
         # Update meta.json
         all_segments = existing_segments + results
-        meta = {
+        self._save_meta(masks_dir, {
             "scale": scale,
             "orig_w": orig_w,
             "orig_h": orig_h,
             "settings": {"max_dim": max_dim, "mode": "manual"},
             "segments": all_segments,
-        }
-        tmp_path = meta_path + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(meta, f)
-        os.replace(tmp_path, meta_path)
+        })
 
         return results
 
