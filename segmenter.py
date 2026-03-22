@@ -10,10 +10,14 @@ import json
 import os
 import warnings
 
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 import cv2
 import numpy as np
 import torch
 from PIL import Image
+
+from config import cfg
 
 # Suppress the expected _C import warning when CUDA extensions aren't built
 warnings.filterwarnings(
@@ -32,9 +36,6 @@ CHECKPOINT_PATH = os.path.join(
 )
 MODEL_CFG = "configs/sam2.1/sam2.1_hiera_b+.yaml"
 
-# Thumbnails for the gallery preview (512 for retina sharpness)
-THUMB_MAX = 512
-
 
 class ImageSegmenter:
     def __init__(self, checkpoint_path=CHECKPOINT_PATH, model_cfg=MODEL_CFG):
@@ -49,10 +50,10 @@ class ImageSegmenter:
 
         self.mask_generator = SAM2AutomaticMaskGenerator(
             model=sam2_model,
-            points_per_side=32,
-            pred_iou_thresh=0.84,
-            stability_score_thresh=0.90,
-            min_mask_region_area=100,
+            points_per_side=cfg["points_per_side"],
+            pred_iou_thresh=cfg["pred_iou_thresh"],
+            stability_score_thresh=cfg["stability_score_thresh"],
+            min_mask_region_area=cfg["min_mask_region_area"],
         )
         print("SAM 2.1 model loaded successfully.")
 
@@ -67,8 +68,10 @@ class ImageSegmenter:
                 print("MPS available but not functional, falling back to CPU.")
         return torch.device("cpu")
 
-    def _deduplicate_masks(self, masks, iou_thresh=0.9):
+    def _deduplicate_masks(self, masks, iou_thresh=None):
         """Remove near-duplicate masks (IoU > threshold). Keeps first (larger) one."""
+        if iou_thresh is None:
+            iou_thresh = cfg["iou_dedup_thresh"]
         keep = []
         for mask in masks:
             seg = mask["segmentation"]
@@ -98,7 +101,7 @@ class ImageSegmenter:
                 keep.append(mask)
         return keep
 
-    def segment(self, image_path, output_dir, min_area=500, max_dim=2048):
+    def segment(self, image_path, output_dir, min_area=None, max_dim=None):
         """
         Detect all masks and save compact data for deferred rendering.
 
@@ -113,6 +116,13 @@ class ImageSegmenter:
             List of dicts with segment metadata (index, filename,
             area, width, height, predicted_iou).
         """
+        if min_area is None:
+            min_area = cfg["min_area"]
+        if max_dim is None:
+            max_dim = cfg["max_dim"]
+        max_segments = cfg["max_segments"]
+        thumb_max = cfg["thumb_max"]
+
         os.makedirs(output_dir, exist_ok=True)
         masks_dir = os.path.join(output_dir, "masks")
         thumbs_dir = os.path.join(output_dir, "thumbs")
@@ -167,9 +177,9 @@ class ImageSegmenter:
 
         masks.sort(key=lambda m: m["area"], reverse=True)
 
-        for m in masks[200:]:
+        for m in masks[max_segments:]:
             del m["segmentation"]
-        masks = masks[:200]
+        masks = masks[:max_segments]
 
         # SAM can produce near-identical masks from overlapping point prompts
         masks = self._deduplicate_masks(masks)
@@ -229,7 +239,7 @@ class ImageSegmenter:
             del thumb_rgba
 
             # Resize thumbnail
-            t_scale = min(THUMB_MAX / tw, THUMB_MAX / th, 1.0)
+            t_scale = min(thumb_max / tw, thumb_max / th, 1.0)
             if t_scale < 1.0:
                 thumb_img = thumb_img.resize(
                     (max(1, int(tw * t_scale)), max(1, int(th * t_scale))),
@@ -276,15 +286,25 @@ class ImageSegmenter:
         return results
 
     @staticmethod
-    def render_segment(image_path, output_dir, index, meta=None, upscale=1, out_path=None, image_array=None):
+    def render_segment(
+        image_path, output_dir, index, meta=None, upscale=None,
+        out_path=None, image_array=None, tight_crop=None, tight_crop_padding=None,
+    ):
         """
         Render a single full-resolution RGBA PNG on demand.
 
         Pass meta (already-loaded dict) to avoid re-reading meta.json.
-        upscale > 1 resizes the output (e.g. 2 = 2× for sticker quality).
+        upscale > 1 resizes the output (e.g. 2 = 2x for sticker quality).
         out_path overrides the default save location.
+        tight_crop removes empty transparent space around the segment.
         Returns the path to the rendered file, or None on failure.
         """
+        if upscale is None:
+            upscale = cfg["upscale"]
+        if tight_crop is None:
+            tight_crop = cfg["tight_crop"]
+        if tight_crop_padding is None:
+            tight_crop_padding = cfg["tight_crop_padding"]
         masks_dir = os.path.join(output_dir, "masks")
 
         if meta is None:
@@ -396,13 +416,38 @@ class ImageSegmenter:
         binary_mask = (full_mask_np > 127).astype(np.uint8)
         del full_mask_np
         dist = cv2.distanceTransform(binary_mask, cv2.DIST_L2, 5)
-        feather_px = max(2.0, min(min(fw, fh) * 0.012, 8.0))
+        feather_px = max(
+            cfg["feather_min_px"],
+            min(min(fw, fh) * cfg["feather_factor"], cfg["feather_max_px"]),
+        )
         alpha_float = np.clip(dist / feather_px, 0.0, 1.0)
         # Smoothstep t²(3−2t) for natural-looking edge falloff
         alpha_float = alpha_float * alpha_float * (3.0 - 2.0 * alpha_float)
         alpha_np = (alpha_float * 255).astype(np.uint8)
         alpha_np = cv2.GaussianBlur(alpha_np, (5, 5), sigmaX=0.8)
         segment_img.putalpha(Image.fromarray(alpha_np, "L"))
+
+        # ── Tight cropping ────────────────────────────────────────────────
+        # Remove fully-transparent rows/columns (e.g. from contour smoothing)
+        # to minimise file size and wasted space.  Applied before upscale so
+        # the padding scales proportionally with the output resolution.
+        if tight_crop:
+            alpha_arr = np.array(segment_img.split()[-1])
+            rows = np.any(alpha_arr > 0, axis=1)
+            cols = np.any(alpha_arr > 0, axis=0)
+            if rows.any() and cols.any():
+                rmin, rmax = np.where(rows)[0][[0, -1]]
+                cmin, cmax = np.where(cols)[0][[0, -1]]
+                pad = tight_crop_padding
+                h, w = alpha_arr.shape
+                crop_box = (
+                    max(0, cmin - pad),
+                    max(0, rmin - pad),
+                    min(w, cmax + 1 + pad),
+                    min(h, rmax + 1 + pad),
+                )
+                segment_img = segment_img.crop(crop_box)
+            del alpha_arr
 
         # Upscale for sticker-quality output
         if upscale > 1:

@@ -14,8 +14,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 
-os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-
 from flask import (
     Flask,
     jsonify,
@@ -26,16 +24,17 @@ from flask import (
 )
 from PIL import Image
 
+from config import cfg
 from segmenter import ImageSegmenter
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+app.config["MAX_CONTENT_LENGTH"] = cfg["max_upload_mb"] * 1024 * 1024
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "bmp", "tiff"}
-SESSION_TTL_SECONDS = 3600  # 1 hour
+SESSION_TTL_SECONDS = cfg["session_ttl"]
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -121,10 +120,10 @@ def segment(session_id):
     if image_path is None:
         return jsonify({"error": "Session not found"}), 404
 
-    # Parse optional parameters
+    # Parse optional parameters (fall back to config defaults)
     data = request.get_json(silent=True) or {}
-    min_area = data.get("min_area", 500)
-    max_dim = data.get("max_dim", 3072)
+    min_area = data.get("min_area", cfg["min_area"])
+    max_dim = data.get("max_dim", cfg["max_dim"])
 
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
 
@@ -179,7 +178,7 @@ def download(session_id, filename):
     if image_path is None:
         return jsonify({"error": "Original image not found"}), 404
 
-    upscale = max(1, int(request.args.get("upscale", 2)))
+    upscale = max(1, int(request.args.get("upscale", cfg["upscale"])))
     render_dir = os.path.join(session_output_dir, f"render_{upscale}x")
     out_path = os.path.join(render_dir, filename)
 
@@ -215,7 +214,7 @@ def download_all(session_id):
     all_indices = [s["index"] for s in meta["segments"]]
     data = request.get_json(silent=True) or {}
     indices = data.get("indices", all_indices)
-    upscale = max(1, int(data.get("upscale", 2)))
+    upscale = max(1, int(data.get("upscale", cfg["upscale"])))
 
     if not indices:
         return jsonify({"error": "No segments selected"}), 400
@@ -271,4 +270,4 @@ def download_all(session_id):
 
 
 if __name__ == "__main__":
-    app.run(debug=False, host="127.0.0.1", port=5000)
+    app.run(debug=False, host=cfg["host"], port=cfg["port"])

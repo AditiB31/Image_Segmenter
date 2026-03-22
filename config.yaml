@@ -1,0 +1,127 @@
+# ─── Image Segmenter Configuration ─────────────────────────────────────────
+# Edit values below to tune behavior. Restart the app after changes.
+# All parameters include their default values.
+
+# ─── Segmentation Parameters ───────────────────────────────────────────────
+
+# Minimum segment area in pixels (at original image resolution).
+# Segments smaller than this are discarded.
+# Range: 100–5000. Lower = more small fragments, higher = only large objects.
+min_area: 500
+
+# Maximum image dimension (width or height) for SAM inference.
+# Larger images are resized to fit within this before segmentation;
+# masks are then upscaled back to original resolution.
+# Range: 1024–4096. Higher = better quality but slower and more VRAM.
+# Recommended: 2048 for speed, 3072 for quality, 4096 for max detail.
+max_dim: 3072
+
+# Maximum number of segments to retain per image.
+# Range: 10–500. More segments = more disk I/O and processing time.
+max_segments: 200
+
+# Output upscale factor for rendered/saved segment PNGs.
+# 1 = native resolution, 2 = 2x, 4 = 4x (sticker/print quality).
+# Range: 1–4. Higher = larger files, more memory during rendering.
+upscale: 1
+
+# ─── SAM 2.1 Model Parameters ──────────────────────────────────────────────
+# These control how SAM 2.1's automatic mask generator creates masks.
+# Tune with care — small changes can significantly affect output.
+
+# Grid density for point prompts (points_per_side x points_per_side).
+# More points = finer segmentation but slower inference.
+# Range: 16–64. 32 is a good balance of coverage and speed.
+points_per_side: 32
+
+# Predicted IoU threshold. Masks below this confidence level are discarded.
+# Range: 0.70–0.95. Higher = fewer but higher-confidence segments.
+pred_iou_thresh: 0.84
+
+# Stability score threshold. Measures mask consistency when the
+# binarization threshold is varied. More stable masks are more reliable.
+# Range: 0.80–0.97. Higher = only the most stable/reliable masks.
+stability_score_thresh: 0.90
+
+# Minimum mask region area at inference resolution (before any upscaling).
+# SAM's own internal noise filter — catches tiny artefacts.
+# Range: 50–500. Keep low; min_area handles real filtering at full res.
+min_mask_region_area: 100
+
+# IoU threshold for deduplicating near-identical overlapping masks.
+# SAM can produce duplicates from adjacent point prompts.
+# Range: 0.70–0.95. Lower = more aggressive deduplication.
+iou_dedup_thresh: 0.9
+
+# ─── Thumbnail Settings ────────────────────────────────────────────────────
+
+# Maximum dimension (px) for gallery thumbnail previews.
+# Range: 256–1024. 512 is sharp on retina/HiDPI displays.
+thumb_max: 512
+
+# ─── Edge Feathering ───────────────────────────────────────────────────────
+# Controls the soft alpha gradient at segment edges for clean compositing.
+# Feather radius scales with segment size:
+#   feather_px = clamp(min(width, height) * feather_factor, min, max)
+
+# Minimum feather radius in pixels.
+feather_min_px: 2.0
+
+# Maximum feather radius in pixels.
+feather_max_px: 8.0
+
+# Feather factor (proportion of the segment's smaller dimension).
+feather_factor: 0.012
+
+# ─── Tight Cropping ────────────────────────────────────────────────────────
+# Remove empty transparent space around segments for smaller file sizes.
+
+# Enable tight cropping. When true, rendered segments are cropped to
+# the bounding box of their visible (non-transparent) pixels.
+tight_crop: true
+
+# Padding in pixels added around the tight crop boundary.
+# Applied at pre-upscale resolution (so 4px becomes 8px at 2x upscale).
+# Range: 0–20. A small pad prevents content from touching the edge.
+tight_crop_padding: 4
+
+# ─── PDF Pipeline Settings ─────────────────────────────────────────────────
+
+# DPI for rasterising PDF pages to images.
+# Range: 72–600. 150 = fast/compact, 200 = balanced, 300 = print-quality.
+# Higher DPI produces larger slide images, improving segmentation detail
+# at the cost of speed and memory.
+pdf_dpi: 200
+
+# Image format for converted PDF pages.
+# Options: png (lossless, larger), jpg (lossy, smaller).
+pdf_image_format: png
+
+# ─── Default Paths (for PDFs placed in data/pdfs/) ─────────────────────────
+# When a PDF lives outside data/pdfs/, the pipeline auto-creates
+# slide_images/ and slide_image_segments/ next to the PDF instead.
+
+# Base data directory (relative to project root).
+data_dir: data
+
+# Subdirectory under data_dir for input PDFs.
+pdf_subdir: pdfs
+
+# Subdirectory under data_dir for converted slide images.
+images_subdir: images
+
+# Subdirectory under data_dir for segmented output assets.
+segments_subdir: segments
+
+# ─── Web Server Settings ───────────────────────────────────────────────────
+
+# Maximum upload file size in megabytes.
+max_upload_mb: 50
+
+# Session time-to-live in seconds. Uploaded files and results are
+# cleaned up after this period.
+session_ttl: 3600
+
+# Flask server bind address and port.
+host: "127.0.0.1"
+port: 5000
