@@ -59,6 +59,7 @@ let currentSessionId = null;
 let allSegments = [];
 let selectedIndices = new Set();
 let segmentMap = null;           // cached Map(index → segment) for sorting
+let lastClickedCardIdx = null;   // grid position of last clicked card (for shift-click range)
 
 // PDF state
 let currentPdfSlides = [];
@@ -89,6 +90,15 @@ function showToast(message, type = "error", duration = 5000) {
 let currentSourceName = "";
 
 // ── Utilities ─────────────────────────────────────────────────────────
+async function getErrorMessage(res, fallback) {
+    try {
+        const data = await res.json();
+        return data.error || fallback;
+    } catch {
+        return `${fallback} (${res.status})`;
+    }
+}
+
 function debounce(fn, ms) {
     let timer;
     return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
@@ -285,6 +295,21 @@ clearSelectionBtn.addEventListener("click", () => {
     updateSelectionUI();
 });
 
+// Keyboard shortcuts for segment selection
+document.addEventListener("keydown", (e) => {
+    // Only when results section is visible
+    if (resultsSection.hidden) return;
+    // Don't intercept when typing in inputs
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+
+    if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+        e.preventDefault();
+        selectAllBtn.click();
+    } else if (e.key === "Escape") {
+        clearSelectionBtn.click();
+    }
+});
+
 // ── Download ──────────────────────────────────────────────────────────
 downloadBtn.addEventListener("click", async () => {
     if (currentMode === "browse") {
@@ -306,7 +331,7 @@ downloadBtn.addEventListener("click", async () => {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
         });
-        if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Download failed"); }
+        if (!res.ok) throw new Error(await getErrorMessage(res, "Download failed"));
 
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
@@ -337,7 +362,7 @@ async function downloadBrowseSegments() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ indices }),
         });
-        if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Download failed"); }
+        if (!res.ok) throw new Error(await getErrorMessage(res, "Download failed"));
 
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
@@ -394,7 +419,7 @@ async function handleImageFile(file) {
         const formData = new FormData();
         formData.append("file", file);
         const uploadRes = await fetch("/upload", { method: "POST", body: formData });
-        if (!uploadRes.ok) { const err = await uploadRes.json(); throw new Error(err.error || "Upload failed"); }
+        if (!uploadRes.ok) throw new Error(await getErrorMessage(uploadRes, "Upload failed"));
         const uploadData = await uploadRes.json();
         currentSessionId = uploadData.session_id;
         currentSourceName = uploadData.filename.replace(/\.[^.]+$/, "");
@@ -407,7 +432,7 @@ async function handleImageFile(file) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ min_area: 100 }),
         });
-        if (!segRes.ok) { const err = await segRes.json(); throw new Error(err.error || "Segmentation failed"); }
+        if (!segRes.ok) throw new Error(await getErrorMessage(segRes, "Segmentation failed"));
         const segData = await segRes.json();
         allSegments = segData.segments;
         selectedIndices.clear();
@@ -435,7 +460,7 @@ async function handlePdfFile(file) {
         const formData = new FormData();
         formData.append("file", file);
         const res = await fetch("/upload-pdf", { method: "POST", body: formData });
-        if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Upload failed"); }
+        if (!res.ok) throw new Error(await getErrorMessage(res, "Upload failed"));
         const data = await res.json();
 
         currentSessionId = data.session_id;
@@ -522,7 +547,7 @@ async function segmentSlide(idx) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ min_area: 100 }),
         });
-        if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Segmentation failed"); }
+        if (!res.ok) throw new Error(await getErrorMessage(res, "Segmentation failed"));
         const data = await res.json();
         allSegments = data.segments;
         selectedIndices.clear();
@@ -546,6 +571,7 @@ async function loadRuns() {
 
     try {
         const res = await fetch("/browse/runs");
+        if (!res.ok) throw new Error(`Server error (${res.status})`);
         const data = await res.json();
         browseLoading.hidden = true;
 
@@ -597,6 +623,7 @@ async function loadRun(runName) {
 
     try {
         const res = await fetch(`/browse/run/${runName}`);
+        if (!res.ok) throw new Error(`Server error (${res.status})`);
         const data = await res.json();
 
         currentRunSlides = data.slides;
@@ -627,6 +654,7 @@ async function loadBrowseSlideSegments(runName, slideName, slideIdx) {
 
     try {
         const res = await fetch(`/browse/run/${runName}/${slideName}`);
+        if (!res.ok) throw new Error(`Server error (${res.status})`);
         const data = await res.json();
         allSegments = data.segments;
         selectedIndices.clear();
@@ -705,7 +733,24 @@ function renderResults() {
 
         card.addEventListener("click", (e) => {
             if (e.target.closest(".segment-download") || e.target.closest(".segment-zoom")) return;
-            toggleSelection(card, seg.index);
+            const cards = [...segmentsGrid.querySelectorAll(".segment-card")];
+            const cardIdx = cards.indexOf(card);
+            if (e.shiftKey && lastClickedCardIdx !== null) {
+                // Range select: toggle all visible cards between last click and this one
+                const lo = Math.min(lastClickedCardIdx, cardIdx);
+                const hi = Math.max(lastClickedCardIdx, cardIdx);
+                for (let i = lo; i <= hi; i++) {
+                    if (!cards[i].hidden) {
+                        const idx = parseInt(cards[i].dataset.index, 10);
+                        selectedIndices.add(idx);
+                        cards[i].classList.add("selected");
+                    }
+                }
+                updateSelectionUI();
+            } else {
+                toggleSelection(card, seg.index);
+            }
+            lastClickedCardIdx = cardIdx;
         });
 
         card.querySelector(".segment-zoom").addEventListener("click", (e) => {

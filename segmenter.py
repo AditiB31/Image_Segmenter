@@ -159,23 +159,20 @@ class ImageSegmenter:
         os.makedirs(masks_dir, exist_ok=True)
         os.makedirs(thumbs_dir, exist_ok=True)
 
-        original = Image.open(image_path).convert("RGB")
-        orig_w, orig_h = original.size
+        with Image.open(image_path) as original:
+            original = original.convert("RGB")
+            orig_w, orig_h = original.size
 
-        # Resize for inference if needed
-        scale = 1.0
-        if max(orig_w, orig_h) > max_dim:
-            scale = max_dim / max(orig_w, orig_h)
-            new_w = int(orig_w * scale)
-            new_h = int(orig_h * scale)
-            inference_image = np.array(original.resize((new_w, new_h), Image.LANCZOS))
-            thumb_source = inference_image
-        else:
-            inference_image = np.array(original)
-            thumb_source = inference_image
-
-        original.close()
-        del original
+            # Resize for inference if needed
+            scale = 1.0
+            if max(orig_w, orig_h) > max_dim:
+                scale = max_dim / max(orig_w, orig_h)
+                new_w = int(orig_w * scale)
+                new_h = int(orig_h * scale)
+                inference_image = np.array(original.resize((new_w, new_h), Image.LANCZOS))
+            else:
+                inference_image = np.array(original)
+        thumb_source = inference_image
 
         with torch.inference_mode():
             # Float16 autocast on Apple Silicon — ~2x faster, same quality
@@ -234,12 +231,12 @@ class ImageSegmenter:
             # Crop mask at inference resolution (compact)
             mask_crop = seg_mask[inf_y:inf_b, inf_x:inf_r]
 
-            # Compute full-res bbox
+            # Compute full-res bbox (round for sub-pixel accuracy)
             if scale != 1.0:
-                fx = max(0, int(bbox[0] / scale))
-                fy = max(0, int(bbox[1] / scale))
-                fw = min(int(bbox[2] / scale), orig_w - fx)
-                fh = min(int(bbox[3] / scale), orig_h - fy)
+                fx = max(0, round(bbox[0] / scale))
+                fy = max(0, round(bbox[1] / scale))
+                fw = min(round(bbox[2] / scale), orig_w - fx)
+                fh = min(round(bbox[3] / scale), orig_h - fy)
             else:
                 fx, fy, fw, fh = inf_x, inf_y, inf_w, inf_h
                 fw = min(fw, orig_w - fx)
@@ -304,6 +301,7 @@ class ImageSegmenter:
             "scale": scale,
             "orig_w": orig_w,
             "orig_h": orig_h,
+            "settings": {"min_area": min_area, "max_dim": max_dim},
             "segments": results,
         }
         meta_path = os.path.join(masks_dir, "meta.json")
@@ -360,14 +358,18 @@ class ImageSegmenter:
         inf_x, inf_y, inf_w, inf_h = seg_info["bbox_inf"]
 
         # Load compact mask (at inference resolution)
-        npz = np.load(os.path.join(masks_dir, f"{index}.npz"))
-        shape = tuple(npz["shape"])
-        mask_inf = (
-            np.unpackbits(npz["mask"])[: shape[0] * shape[1]]
-            .reshape(shape)
-            .astype(np.uint8)
-            * 255
-        )
+        npz_path = os.path.join(masks_dir, f"{index}.npz")
+        try:
+            npz = np.load(npz_path)
+            shape = tuple(npz["shape"])
+            mask_inf = (
+                np.unpackbits(npz["mask"])[: shape[0] * shape[1]]
+                .reshape(shape)
+                .astype(np.uint8)
+                * 255
+            )
+        except (IOError, ValueError, KeyError):
+            return None  # corrupt or missing mask file
 
         # ── Morphological cleanup ────────────────────────────────────────────
         # Remove isolated noise pixels (1-2px) that SAM sometimes produces at
@@ -430,8 +432,10 @@ class ImageSegmenter:
                 smooth[:, axis] = np.convolve(padded, kernel, mode="valid")
 
             smooth_pts = np.round(smooth).astype(np.int32).reshape(-1, 1, 2)
-            mask_inf = np.zeros_like(mask_inf)
-            cv2.drawContours(mask_inf, [smooth_pts], -1, 255, cv2.FILLED)
+            # Only redraw if smoothed contour is non-degenerate (>= 3 points)
+            if len(smooth_pts) >= 3:
+                mask_inf = np.zeros_like(mask_inf)
+                cv2.drawContours(mask_inf, [smooth_pts], -1, 255, cv2.FILLED)
 
         # ── Upscale to full resolution ────────────────────────────────────────
         # Use CUBIC interpolation for smooth upscaling, then apply sigmoid-like
@@ -482,10 +486,13 @@ class ImageSegmenter:
             cfg["feather_min_px"],
             min(min(fw, fh) * cfg["feather_factor"], cfg["feather_max_px"]),
         )
+        del binary_mask
         alpha_float = np.clip(dist / feather_px, 0.0, 1.0)
+        del dist
         # Smoothstep t²(3−2t) for natural-looking edge falloff
         alpha_float = alpha_float * alpha_float * (3.0 - 2.0 * alpha_float)
         alpha_np = (alpha_float * 255).astype(np.uint8)
+        del alpha_float
         blur_k = cfg["feather_blur_kernel"]
         blur_s = cfg["feather_blur_sigma"]
         if blur_k > 1 and blur_s > 0:

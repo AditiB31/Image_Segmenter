@@ -213,6 +213,9 @@ Examples:
     page_indices = None
     if args.slides:
         page_indices = parse_slide_range(args.slides, total_pages)
+        if not page_indices:
+            print(f"Error: No valid slides in range '{args.slides}' (PDF has {total_pages} pages)")
+            sys.exit(1)
 
     # Check cache
     slide_paths, cached = _get_cached_images(images_dir, dpi, img_fmt, page_indices)
@@ -244,8 +247,11 @@ Examples:
             "converted_at": datetime.now().isoformat(),
             "pdf_name": pdf_name,
         }
-        with open(os.path.join(images_dir, "conversion_info.json"), "w") as f:
+        info_path = os.path.join(images_dir, "conversion_info.json")
+        tmp_path = info_path + ".tmp"
+        with open(tmp_path, "w") as f:
             json.dump(conversion_info, f, indent=2)
+        os.replace(tmp_path, info_path)
 
     gc.collect()
 
@@ -299,26 +305,34 @@ Examples:
 
             def _render_one(seg):
                 out = os.path.join(render_dir, seg["filename"])
-                ImageSegmenter.render_segment(
-                    slide_path,
-                    seg_dir,
-                    seg["index"],
-                    meta=meta,
-                    upscale=upscale,
-                    out_path=out,
-                    image_array=image_array,
-                )
+                try:
+                    ImageSegmenter.render_segment(
+                        slide_path,
+                        seg_dir,
+                        seg["index"],
+                        meta=meta,
+                        upscale=upscale,
+                        out_path=out,
+                        image_array=image_array,
+                    )
+                    return True
+                except Exception as e:
+                    print(f"    Warning: failed to render segment {seg['index']}: {e}")
+                    return False
 
             t2 = time.time()
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                list(pool.map(_render_one, segments))
+                render_results = list(pool.map(_render_one, segments))
+            rendered_count = sum(1 for r in render_results if r)
 
             del image_array, meta
             gc.collect()
             render_time = time.time() - t2
-            print(
-                f"    Rendered {len(segments)} segments at {upscale}x ({render_time:.1f}s)"
-            )
+            failed = len(segments) - rendered_count
+            status = f"    Rendered {rendered_count} segments at {upscale}x ({render_time:.1f}s)"
+            if failed:
+                status += f" ({failed} failed)"
+            print(status)
             print(f"    -> {render_dir}")
 
         total_segments += len(segments)

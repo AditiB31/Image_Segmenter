@@ -237,6 +237,9 @@ def download(session_id, filename):
 
     slide = request.args.get("slide")
     if slide:
+        # Validate slide name to prevent directory traversal
+        if os.sep in slide or "/" in slide or ".." in slide:
+            return jsonify({"error": "Invalid slide name"}), 400
         # PDF session: image is from cached slide images
         pdf_session = _load_pdf_session(session_id)
         if pdf_session is None:
@@ -257,9 +260,12 @@ def download(session_id, filename):
 
     if not os.path.exists(out_path):
         os.makedirs(render_dir, exist_ok=True)
-        result = segmenter.render_segment(
-            image_path, seg_output_dir, idx, upscale=upscale, out_path=out_path
-        )
+        try:
+            result = segmenter.render_segment(
+                image_path, seg_output_dir, idx, upscale=upscale, out_path=out_path
+            )
+        finally:
+            _cleanup_memory()
         if result is None:
             return jsonify({"error": "Segment not found"}), 404
 
@@ -278,6 +284,9 @@ def download_all(session_id):
 
     # Resolve image path and segment output dir based on session type
     if slide:
+        # Validate slide name to prevent directory traversal
+        if os.sep in slide or "/" in slide or ".." in slide:
+            return jsonify({"error": "Invalid slide name"}), 400
         pdf_session = _load_pdf_session(session_id)
         if pdf_session is None:
             return jsonify({"error": "PDF session not found"}), 404
@@ -531,6 +540,26 @@ def segment_slide(session_id, slide_index):
     max_dim = data.get("max_dim", cfg["max_dim"])
 
     seg_output_dir = os.path.join(OUTPUT_DIR, session_id, slide_name)
+
+    # Check for cached segmentation results with matching parameters
+    meta_path = os.path.join(seg_output_dir, "masks", "meta.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+            cached_settings = meta.get("settings", {})
+            if (cached_settings.get("min_area") == min_area
+                    and cached_settings.get("max_dim") == max_dim):
+                return jsonify({
+                    "session_id": session_id,
+                    "slide_name": slide_name,
+                    "slide_index": slide_index,
+                    "segment_count": len(meta["segments"]),
+                    "segments": meta["segments"],
+                    "cached": True,
+                })
+        except (json.JSONDecodeError, KeyError):
+            pass  # corrupted cache, re-segment
 
     try:
         segments = segmenter.segment(
