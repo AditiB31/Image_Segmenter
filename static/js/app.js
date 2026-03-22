@@ -925,6 +925,7 @@ function updateVisibleCount() {
 }
 
 function sortSegments(criterion) {
+    if (!segmentMap) return;
     const cards = [...segmentsGrid.querySelectorAll(".segment-card")];
     cards.sort((a, b) => {
         const aSeg = segmentMap.get(parseInt(a.dataset.index));

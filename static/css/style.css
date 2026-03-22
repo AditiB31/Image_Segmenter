@@ -561,19 +561,13 @@ main {
 
 /* ── Mode Tabs ────────────────────────────────────────────────────── */
 .mode-tabs {
-    display: flex;
+    display: inline-flex;
     justify-content: center;
     gap: 0.25rem;
     margin-top: 1rem;
     padding: 0.25rem;
     background: var(--btn-secondary-bg);
     border-radius: 10px;
-    display: inline-flex;
-}
-
-header .mode-tabs {
-    display: flex;
-    justify-content: center;
 }
 
 header > .mode-tabs {

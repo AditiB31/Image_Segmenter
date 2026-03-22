@@ -76,6 +76,8 @@ def load_config(path=_CONFIG_PATH):
             config.update(user)
         except ImportError:
             pass  # pyyaml not installed — use defaults silently
+        except Exception as exc:
+            print(f"Warning: failed to parse {path}: {exc} — using defaults")
     return config
 
 

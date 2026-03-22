@@ -51,8 +51,8 @@ The SAM 2.1 model loads into memory at startup (takes a few seconds). Run tests 
 - The model checkpoint lives at `checkpoints/sam2.1_hiera_base_plus.pt` (gitignored).
 - `uploads/`, `outputs/`, and `data/` are gitignored working directories.
 - Max upload size, session TTL, host, and port are configured via `config.yaml`.
-- Images larger than `max_dim` (default 3072px) are resized for inference, then masks are upscaled back.
-- Segments are capped at `max_segments` (default 200) per image, sorted by area descending, filtered by `min_area` (default 500px).
+- Images larger than `max_dim` (default 2048px) are resized for inference, then masks are upscaled back.
+- Segments are capped at `max_segments` (default 50) per image, sorted by area descending, filtered by `min_area` (default 6000px).
 - SAM runs with `torch.autocast` float16 on MPS for better throughput on Apple Silicon.
 - Segments are tightly cropped to their visible content with configurable padding (`tight_crop_padding`, default 4px) to save disk space.
 - Slide images are cached in `data/images/<pdf_name>/` (no timestamp). Running the pipeline again reuses cached images if the DPI matches.
@@ -60,6 +60,6 @@ The SAM 2.1 model loads into memory at startup (takes a few seconds). Run tests 
 - The `rendered/` folder contains the final transparent PNGs for use in Keynote/presentations. `thumbs/` is for preview only.
 - External PDFs create `slide_images/` and `slide_image_segments/` next to the PDF.
 - All hardcoded parameters have been moved to `config.yaml` — edit that file to tune behaviour without changing code.
-- Memory management: `render_workers` (default 4) caps concurrent rendering threads. `gc.collect()` and `torch.mps.empty_cache()` are called between slides and after web requests.
+- Memory management: `render_workers` (default 2) caps concurrent rendering threads. `gc.collect()` and `torch.mps.empty_cache()` are called between slides and after web requests.
 - Manual annotation uses `SAM2ImagePredictor` with `multimask_output=True` and selects the highest-confidence mask. Prompts support points (foreground/background), polygons (converted to bounding box + sampled foreground points), and boxes. Masks are stored in the same compact npz format as automatic segmentation, so `render_segment()` and all download routes work without modification.
 - The annotation canvas scales the image to fit the viewport. Coordinates are stored in original image space and scaled to inference resolution by the backend. Segments can be extracted incrementally (each Extract Segment call appends to the session's meta.json).

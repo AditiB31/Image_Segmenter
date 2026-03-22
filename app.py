@@ -190,6 +190,8 @@ def upload():
 
 @app.route("/segment/<session_id>", methods=["POST"])
 def segment(session_id):
+    if not _safe_component(session_id):
+        return jsonify({"error": "Invalid session"}), 400
     cleanup_old_sessions()
 
     image_path = _get_image_path(session_id)
@@ -232,9 +234,13 @@ def segment(session_id):
 @app.route("/segment-image/<session_id>/<filename>")
 def segment_image(session_id, filename):
     """Serve thumbnail for gallery preview. Supports ?slide=slide_001 for PDF sessions."""
+    if not _safe_component(session_id) or not _safe_component(filename):
+        return jsonify({"error": "Invalid path"}), 400
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
     slide = request.args.get("slide")
     if slide:
+        if not _safe_component(slide):
+            return jsonify({"error": "Invalid slide name"}), 400
         thumbs_dir = os.path.join(session_output_dir, slide, "thumbs")
     else:
         thumbs_dir = os.path.join(session_output_dir, "thumbs")
@@ -247,6 +253,8 @@ def segment_image(session_id, filename):
 @app.route("/download/<session_id>/<filename>")
 def download(session_id, filename):
     """Render full-res segment on demand and serve it. Supports ?slide= for PDF sessions."""
+    if not _safe_component(session_id) or not _safe_component(filename):
+        return jsonify({"error": "Invalid path"}), 400
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
     if not os.path.isdir(session_output_dir):
         return jsonify({"error": "Session not found"}), 404
@@ -283,6 +291,8 @@ def download(session_id, filename):
 @app.route("/download-all/<session_id>", methods=["GET", "POST"])
 def download_all(session_id):
     """Render selected (or all) segments at requested upscale and ZIP them."""
+    if not _safe_component(session_id):
+        return jsonify({"error": "Invalid session"}), 400
     session_output_dir = os.path.join(OUTPUT_DIR, session_id)
     if not os.path.isdir(session_output_dir):
         return jsonify({"error": "Session not found"}), 404
@@ -428,7 +438,7 @@ def annotate(session_id):
                 {"error": "Out of memory. Try a smaller image."}
             ), 500
         return jsonify({"error": "Segmentation failed"}), 500
-    except Exception as e:
+    except Exception:
         return jsonify({"error": "Segmentation failed"}), 500
 
     _cleanup_memory()
@@ -623,6 +633,8 @@ def upload_pdf():
 @app.route("/slide-image/<session_id>/<filename>")
 def slide_image(session_id, filename):
     """Serve slide thumbnail for the PDF slide browser."""
+    if not _safe_component(session_id) or not _safe_component(filename):
+        return jsonify({"error": "Invalid path"}), 400
     thumbs_dir = os.path.join(OUTPUT_DIR, session_id, "slide_thumbs")
     if not os.path.isdir(thumbs_dir):
         return jsonify({"error": "Session not found"}), 404
@@ -649,6 +661,8 @@ def original_slide_image(session_id, slide_index):
 @app.route("/segment-slide/<session_id>/<int:slide_index>", methods=["POST"])
 def segment_slide(session_id, slide_index):
     """Segment a single slide from a PDF upload session."""
+    if not _safe_component(session_id):
+        return jsonify({"error": "Invalid session"}), 400
     pdf_session = _load_pdf_session(session_id)
     if pdf_session is None:
         return jsonify({"error": "PDF session not found"}), 404

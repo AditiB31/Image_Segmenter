@@ -91,8 +91,8 @@ python pdf_pipeline.py /path/to/external/deck.pdf
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--dpi` | `200` | PDF rendering DPI (72-600) |
-| `--min-area` | `500` | Minimum segment area in pixels |
-| `--max-dim` | `3072` | Max inference dimension |
+| `--min-area` | `6000` | Minimum segment area in pixels |
+| `--max-dim` | `2048` | Max inference dimension |
 | `--upscale` | `1` | Output upscale factor (1-4) |
 | `--slides` | all | Slide range, e.g. `1-5` or `3,7,10` |
 
