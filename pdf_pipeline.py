@@ -256,7 +256,8 @@ Examples:
     gc.collect()
 
     # ── Step 2: Segment each slide ─────────────────────────────────────
-    print(f"\nStep 2: Segmenting slides (min_area={min_area}, max_dim={max_dim})...")
+    # Phase 1: Run SAM on all slides (model in memory, no rendering yet)
+    print(f"\nStep 2a: Segmenting slides (min_area={min_area}, max_dim={max_dim})...")
     print("  Loading SAM 2.1 model...")
 
     import torch
@@ -272,7 +273,6 @@ Examples:
 
     total_segments = 0
     slide_results = []
-    workers = min(os.cpu_count() or 4, cfg["render_workers"])
 
     for slide_idx, slide_path in enumerate(slide_paths):
         slide_name = os.path.splitext(os.path.basename(slide_path))[0]
@@ -282,58 +282,13 @@ Examples:
         print(f"\n  [{slide_idx + 1}/{len(slide_paths)}] {slide_name}")
         t1 = time.time()
 
-        # Run segmentation
+        # Run segmentation (saves masks + thumbnails, no full-res rendering)
         segments = segmenter.segment(
             slide_path, seg_dir, min_area=min_area, max_dim=max_dim
         )
 
         seg_time = time.time() - t1
         print(f"    {len(segments)} segments detected ({seg_time:.1f}s)")
-
-        # Render full-resolution segments with shared image array
-        if segments:
-            render_dir = os.path.join(seg_dir, "rendered")
-            os.makedirs(render_dir, exist_ok=True)
-
-            # Load slide image once for all segment renders
-            with Image.open(slide_path) as img:
-                image_array = np.array(img.convert("RGB"))
-
-            # Load meta once
-            with open(os.path.join(seg_dir, "masks", "meta.json")) as f:
-                meta = json.load(f)
-
-            def _render_one(seg):
-                out = os.path.join(render_dir, seg["filename"])
-                try:
-                    ImageSegmenter.render_segment(
-                        slide_path,
-                        seg_dir,
-                        seg["index"],
-                        meta=meta,
-                        upscale=upscale,
-                        out_path=out,
-                        image_array=image_array,
-                    )
-                    return True
-                except Exception as e:
-                    print(f"    Warning: failed to render segment {seg['index']}: {e}")
-                    return False
-
-            t2 = time.time()
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                render_results = list(pool.map(_render_one, segments))
-            rendered_count = sum(1 for r in render_results if r)
-
-            del image_array, meta
-            gc.collect()
-            render_time = time.time() - t2
-            failed = len(segments) - rendered_count
-            status = f"    Rendered {rendered_count} segments at {upscale}x ({render_time:.1f}s)"
-            if failed:
-                status += f" ({failed} failed)"
-            print(status)
-            print(f"    -> {render_dir}")
 
         total_segments += len(segments)
         slide_results.append(
@@ -348,6 +303,71 @@ Examples:
         if segmenter.device.type == "mps":
             torch.mps.empty_cache()
         gc.collect()
+
+    # ── Unload SAM model before rendering ────────────────────────────
+    # This frees ~1-2GB of model weights so rendering doesn't compete
+    # with the model for memory.
+    device_type = segmenter.device.type
+    del segmenter
+    if device_type == "mps":
+        torch.mps.empty_cache()
+    gc.collect()
+    print("\n  SAM model unloaded to free memory for rendering.")
+
+    # ── Step 2b: Render full-resolution segments ─────────────────────
+    print(f"\nStep 2b: Rendering segments at {upscale}x...")
+    workers = min(os.cpu_count() or 4, cfg["render_workers"])
+
+    for slide_info in slide_results:
+        if slide_info["segments"] == 0:
+            continue
+
+        slide_name = slide_info["slide"]
+        seg_dir = slide_info["output_dir"]
+        slide_path = os.path.join(images_dir, f"{slide_name}.{img_fmt}")
+        render_dir = os.path.join(seg_dir, "rendered")
+        os.makedirs(render_dir, exist_ok=True)
+
+        # Load meta
+        with open(os.path.join(seg_dir, "masks", "meta.json")) as f:
+            meta = json.load(f)
+
+        segments = meta["segments"]
+
+        # Load slide image once for all segment renders
+        with Image.open(slide_path) as img:
+            image_array = np.array(img.convert("RGB"))
+
+        def _render_one(seg):
+            out = os.path.join(render_dir, seg["filename"])
+            try:
+                ImageSegmenter.render_segment(
+                    slide_path,
+                    seg_dir,
+                    seg["index"],
+                    meta=meta,
+                    upscale=upscale,
+                    out_path=out,
+                    image_array=image_array,
+                )
+                return True
+            except Exception as e:
+                print(f"    Warning: failed to render segment {seg['index']}: {e}")
+                return False
+
+        t2 = time.time()
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            render_results = list(pool.map(_render_one, segments))
+        rendered_count = sum(1 for r in render_results if r)
+
+        del image_array, meta
+        gc.collect()
+        render_time = time.time() - t2
+        failed = len(segments) - rendered_count
+        status = f"  [{slide_name}] Rendered {rendered_count} segments ({render_time:.1f}s)"
+        if failed:
+            status += f" ({failed} failed)"
+        print(status)
 
     # ── Summary ────────────────────────────────────────────────────────
     print(f"\n{'=' * 60}")

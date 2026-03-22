@@ -12,16 +12,21 @@ _CONFIG_PATH = os.path.join(_BASE_DIR, "config.yaml")
 
 _DEFAULTS = {
     # Segmentation
-    "min_area": 500,
-    "max_dim": 3072,
-    "max_segments": 200,
+    "min_area": 6000,
+    "min_color_std": 15.0,
+    "min_saturation": 25,
+    "max_dim": 2048,
+    "max_segments": 50,
     "upscale": 1,
     # SAM 2.1 model
     "points_per_side": 32,
     "pred_iou_thresh": 0.84,
     "stability_score_thresh": 0.90,
-    "min_mask_region_area": 100,
-    "iou_dedup_thresh": 0.9,
+    "min_mask_region_area": 500,
+    "min_fill_ratio": 0.45,
+    "max_aspect_ratio": 3.5,
+    "iou_dedup_thresh": 0.8,
+    "containment_thresh": 0.7,
     # Thumbnails
     "thumb_max": 512,
     # Edge feathering (sticker-friendly defaults)
@@ -43,7 +48,7 @@ _DEFAULTS = {
     # PDF pipeline
     "pdf_dpi": 200,
     "pdf_image_format": "png",
-    "render_workers": 4,
+    "render_workers": 2,
     # Paths
     "data_dir": "data",
     "pdf_subdir": "pdfs",

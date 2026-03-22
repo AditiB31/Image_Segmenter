@@ -68,14 +68,21 @@ class ImageSegmenter:
                 print("MPS available but not functional, falling back to CPU.")
         return torch.device("cpu")
 
-    def _deduplicate_masks(self, masks, iou_thresh=None):
-        """Remove near-duplicate masks (IoU > threshold). Keeps first (larger) one.
+    def _deduplicate_masks(self, masks, iou_thresh=None, containment_thresh=None):
+        """Remove near-duplicate and sub-component masks.
 
-        Uses spatial grid bucketing for O(n*k) average performance instead of O(n²),
-        where k is the average number of overlapping masks per cell.
+        A mask is removed if:
+          - IoU with a kept mask > iou_thresh (near-duplicate), OR
+          - its overlap with a kept mask > containment_thresh of its own area
+            (sub-component of a larger object).
+
+        Masks must be sorted largest-first. Uses spatial grid bucketing for
+        O(n*k) average performance.
         """
         if iou_thresh is None:
             iou_thresh = cfg["iou_dedup_thresh"]
+        if containment_thresh is None:
+            containment_thresh = cfg.get("containment_thresh", 0)
         if len(masks) <= 1:
             return masks
 
@@ -124,6 +131,11 @@ class ImageSegmenter:
                 if union > 0 and inter / union > iou_thresh:
                     is_dup = True
                     break
+                # Containment check: discard if this mask is mostly inside a larger one
+                if containment_thresh > 0 and mask["area"] > 0:
+                    if inter / mask["area"] > containment_thresh:
+                        is_dup = True
+                        break
             if not is_dup:
                 idx = len(keep)
                 keep.append(mask)
@@ -192,15 +204,71 @@ class ImageSegmenter:
             torch.mps.empty_cache()
         gc.collect()
 
-        # Filter by area
+        # Filter by area and aspect ratio
         inv_scale_sq = 1.0 / (scale * scale) if scale != 1.0 else 1.0
+        max_aspect = cfg.get("max_aspect_ratio", 0)
+        min_fill = cfg.get("min_fill_ratio", 0)
         masks = []
         for m in all_masks:
-            if m["area"] * inv_scale_sq >= min_area:
-                masks.append(m)
-            else:
+            if m["area"] * inv_scale_sq < min_area:
                 del m["segmentation"]
+                continue
+            bw, bh = m["bbox"][2], m["bbox"][3]
+            if bw <= 0 or bh <= 0:
+                del m["segmentation"]
+                continue
+            # Reject excessively elongated segments (grid lines, borders)
+            if max_aspect > 0:
+                ratio = max(bw, bh) / min(bw, bh)
+                if ratio > max_aspect:
+                    del m["segmentation"]
+                    continue
+            # Reject low fill ratio segments (text, thin shapes)
+            fill = m["area"] / (bw * bh) if (bw * bh) > 0 else 0
+            if min_fill > 0 and fill < min_fill:
+                del m["segmentation"]
+                continue
+            # Small segments with very high fill are almost certainly text
+            # (e.g. "CME", "OK"). Large solid objects are fine.
+            if m["area"] < 20000 and fill > 0.90:
+                del m["segmentation"]
+                continue
+            masks.append(m)
         del all_masks
+
+        # Color-based filters using inference image data.
+        # 1. Near-white background: bright (mean > 240) + uniform (std < threshold)
+        # 2. Small text detection: small segments with very low saturation
+        #    are almost always dark text on a light slide. Icons/graphics
+        #    tend to have colour (saturation > 0).
+        min_color_std = cfg.get("min_color_std", 0)
+        min_sat = cfg.get("min_saturation", 0)
+        small_seg_area = 15000  # only apply saturation check to small segments
+        if min_color_std > 0 or min_sat > 0:
+            filtered = []
+            for m in masks:
+                seg = m["segmentation"]
+                bbox = m["bbox"]
+                x, y, w, h = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+                crop = inference_image[y:y+h, x:x+w]
+                mask_crop = seg[y:y+h, x:x+w]
+                pixels = crop[mask_crop]
+                if len(pixels) > 0:
+                    mean_val = float(np.mean(pixels))
+                    std_val = float(np.std(pixels))
+                    # Reject near-white flat backgrounds
+                    if min_color_std > 0 and mean_val > 240 and std_val < min_color_std:
+                        del m["segmentation"]
+                        continue
+                    # Reject small low-saturation segments (dark text)
+                    if min_sat > 0 and m["area"] * inv_scale_sq < small_seg_area:
+                        hsv_crop = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
+                        sat_pixels = hsv_crop[:, :, 1][mask_crop]
+                        if float(np.mean(sat_pixels)) < min_sat:
+                            del m["segmentation"]
+                            continue
+                filtered.append(m)
+            masks = filtered
 
         masks.sort(key=lambda m: m["area"], reverse=True)
 

@@ -6,19 +6,21 @@
 
 # Minimum segment area in pixels (at original image resolution).
 # Segments smaller than this are discarded.
-# Range: 100–5000. Lower = more small fragments, higher = only large objects.
-min_area: 500
+# Range: 100–50000. Lower = more small fragments, higher = only large objects.
+# 6000 is safe with the quality filters (aspect ratio, fill ratio, color std)
+# which handle text rejection. Lower values recover small compact objects.
+min_area: 6000
 
 # Maximum image dimension (width or height) for SAM inference.
 # Larger images are resized to fit within this before segmentation;
 # masks are then upscaled back to original resolution.
 # Range: 1024–4096. Higher = better quality but slower and more VRAM.
-# Recommended: 2048 for speed, 3072 for quality, 4096 for max detail.
-max_dim: 3072
+# 2048 is recommended for 32GB machines; 3072+ needs 64GB+.
+max_dim: 2048
 
 # Maximum number of segments to retain per image.
 # Range: 10–500. More segments = more disk I/O and processing time.
-max_segments: 200
+max_segments: 50
 
 # Output upscale factor for rendered/saved segment PNGs.
 # 1 = native resolution, 2 = 2x, 4 = 4x (sticker/print quality).
@@ -31,27 +33,58 @@ upscale: 1
 
 # Grid density for point prompts (points_per_side x points_per_side).
 # More points = finer segmentation but slower inference.
-# Range: 16–64. 32 is a good balance of coverage and speed.
+# Range: 16–64. 32 gives best coverage; post-filters handle noise.
+# Memory scales as n² but the quality filters keep output clean.
 points_per_side: 32
 
 # Predicted IoU threshold. Masks below this confidence level are discarded.
-# Range: 0.70–0.95. Higher = fewer but higher-confidence segments.
+# Range: 0.70–0.95. Keep permissive; post-filters handle quality.
 pred_iou_thresh: 0.84
 
 # Stability score threshold. Measures mask consistency when the
 # binarization threshold is varied. More stable masks are more reliable.
-# Range: 0.80–0.97. Higher = only the most stable/reliable masks.
+# Range: 0.80–0.97. Keep permissive; post-filters handle quality.
 stability_score_thresh: 0.90
 
 # Minimum mask region area at inference resolution (before any upscaling).
 # SAM's own internal noise filter — catches tiny artefacts.
-# Range: 50–500. Keep low; min_area handles real filtering at full res.
-min_mask_region_area: 100
+# Range: 50–1000. Higher values reduce peak memory by discarding small
+# masks before they accumulate in the mask list.
+min_mask_region_area: 500
+
+# Minimum color standard deviation within a segment's masked pixels.
+# Segments with lower variance than this are likely flat backgrounds
+# (e.g. white slide regions). Set to 0 to disable. Range: 0–30.
+min_color_std: 15.0
+
+# Minimum mean saturation (HSV) for small segments (area < 15000).
+# Dark text on slides has near-zero saturation; coloured icons/graphics
+# have higher saturation. Set to 0 to disable. Range: 0–60.
+min_saturation: 25
+
+# Minimum fill ratio (mask area / bounding box area).
+# Text and thin shapes have low fill ratios (~0.3–0.5). Solid objects
+# like icons and photos fill their bbox more densely (~0.6–0.9).
+# Range: 0.0–0.8. Set to 0 to disable.
+min_fill_ratio: 0.45
+
+# Maximum aspect ratio (long side / short side) for segments.
+# Segments more elongated than this are discarded (e.g. grid lines,
+# text words, thin borders). Set to 0 to disable. Range: 2–20.
+# 3.5 filters most single-word text while keeping real objects.
+max_aspect_ratio: 3.5
 
 # IoU threshold for deduplicating near-identical overlapping masks.
 # SAM can produce duplicates from adjacent point prompts.
 # Range: 0.70–0.95. Lower = more aggressive deduplication.
-iou_dedup_thresh: 0.9
+iou_dedup_thresh: 0.8
+
+# Containment threshold for removing sub-component segments.
+# If this fraction of a smaller segment's pixels lie inside a larger
+# kept segment, the smaller one is discarded as a sub-component.
+# Range: 0.5–0.95. Lower = more aggressive sub-component removal.
+# Set to 0 to disable.
+containment_thresh: 0.7
 
 # ─── Thumbnail Settings ────────────────────────────────────────────────────
 
@@ -141,8 +174,8 @@ pdf_image_format: png
 
 # Maximum concurrent workers for rendering segments.
 # Lower values reduce peak memory usage at the cost of speed.
-# Range: 1–8. 4 is a good balance for Apple Silicon with 32GB RAM.
-render_workers: 4
+# Range: 1–8. 2 is safe for 32GB Apple Silicon; 4 for 64GB+.
+render_workers: 2
 
 # ─── Default Paths (for PDFs placed in data/pdfs/) ─────────────────────────
 # When a PDF lives outside data/pdfs/, the pipeline auto-creates
