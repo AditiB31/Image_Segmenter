@@ -314,6 +314,7 @@ Examples:
                 list(pool.map(_render_one, segments))
 
             del image_array, meta
+            gc.collect()
             render_time = time.time() - t2
             print(
                 f"    Rendered {len(segments)} segments at {upscale}x ({render_time:.1f}s)"

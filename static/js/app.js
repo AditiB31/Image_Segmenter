@@ -58,6 +58,7 @@ let currentMode = "image";       // "image" | "pdf" | "browse"
 let currentSessionId = null;
 let allSegments = [];
 let selectedIndices = new Set();
+let segmentMap = null;           // cached Map(index → segment) for sorting
 
 // PDF state
 let currentPdfSlides = [];
@@ -69,6 +70,12 @@ let segmentedSlides = new Set();  // track which slides have been segmented
 let currentRunName = null;
 let currentRunSlides = [];
 let browseImagesDir = null;
+
+// ── Utilities ─────────────────────────────────────────────────────────
+function debounce(fn, ms) {
+    let timer;
+    return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
+}
 
 // ── Icons ─────────────────────────────────────────────────────────────
 const downloadIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
@@ -127,6 +134,7 @@ function resetState() {
     segmentsGrid.innerHTML = "";
     allSegments = [];
     selectedIndices.clear();
+    segmentMap = null;
     currentSessionId = null;
     currentPdfSlides = [];
     currentSlideIndex = null;
@@ -222,10 +230,10 @@ function navigateToSlide(idx) {
 }
 
 // ── Area filter ───────────────────────────────────────────────────────
+const debouncedFilter = debounce(filterSegments, 50);
 areaFilter.addEventListener("input", () => {
-    const minArea = parseInt(areaFilter.value);
-    areaValue.textContent = minArea.toLocaleString() + " px";
-    filterSegments(minArea);
+    areaValue.textContent = parseInt(areaFilter.value).toLocaleString() + " px";
+    debouncedFilter(parseInt(areaFilter.value));
 });
 
 // ── Sort handler ──────────────────────────────────────────────────────
@@ -623,6 +631,8 @@ function renderResults() {
         slideNav.hidden = true;
     }
 
+    segmentMap = new Map(allSegments.map((s) => [s.index, s]));
+
     if (allSegments.length > 0) {
         const maxArea = Math.max(...allSegments.map((s) => s.area));
         areaFilter.max = Math.floor(maxArea / 2);
@@ -726,10 +736,9 @@ function updateVisibleCount() {
 
 function sortSegments(criterion) {
     const cards = [...segmentsGrid.querySelectorAll(".segment-card")];
-    const segMap = new Map(allSegments.map((s) => [s.index, s]));
     cards.sort((a, b) => {
-        const aSeg = segMap.get(parseInt(a.dataset.index));
-        const bSeg = segMap.get(parseInt(b.dataset.index));
+        const aSeg = segmentMap.get(parseInt(a.dataset.index));
+        const bSeg = segmentMap.get(parseInt(b.dataset.index));
         if (!aSeg || !bSeg) return 0;
         switch (criterion) {
             case "area-desc": return bSeg.area - aSeg.area;
