@@ -40,6 +40,8 @@ _DEFAULTS = {
     "pdf_subdir": "pdfs",
     "images_subdir": "images",
     "segments_subdir": "segments",
+    # Safety
+    "max_upscale": 4,
     # Web server
     "max_upload_mb": 50,
     "session_ttl": 3600,

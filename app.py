@@ -18,6 +18,7 @@ import numpy as np
 
 from flask import (
     Flask,
+    after_this_request,
     jsonify,
     request,
     send_file,
@@ -53,6 +54,13 @@ segmenter = ImageSegmenter()
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def _safe_component(name):
+    """Validate a path component to prevent directory traversal."""
+    if not name or "\0" in name or "/" in name or "\\" in name or ".." in name:
+        return False
+    return True
 
 
 def _get_image_path(session_id):
@@ -211,7 +219,8 @@ def download(session_id, filename):
     if image_path is None or not os.path.exists(image_path):
         return jsonify({"error": "Original image not found"}), 404
 
-    upscale = max(1, int(request.args.get("upscale", cfg["upscale"])))
+    max_upscale = cfg.get("max_upscale", 4)
+    upscale = max(1, min(int(request.args.get("upscale", cfg["upscale"])), max_upscale))
     render_dir = os.path.join(seg_output_dir, f"render_{upscale}x")
     out_path = os.path.join(render_dir, filename)
 
@@ -259,7 +268,8 @@ def download_all(session_id):
 
     all_indices = [s["index"] for s in meta["segments"]]
     indices = data.get("indices", all_indices)
-    upscale = max(1, int(data.get("upscale", cfg["upscale"])))
+    max_upscale = cfg.get("max_upscale", 4)
+    upscale = max(1, min(int(data.get("upscale", cfg["upscale"])), max_upscale))
 
     if not indices:
         return jsonify({"error": "No segments selected"}), 400
@@ -298,18 +308,28 @@ def download_all(session_id):
             if result is not None:
                 rendered.append(result)
 
+    del image_array
+
     if not rendered:
         shutil.rmtree(render_dir, ignore_errors=True)
         return jsonify({"error": "No segments could be rendered"}), 404
 
     zip_path = os.path.join(seg_output_dir, f"segments_{upscale}x.zip")
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for path, fname in rendered:
             zf.write(path, fname)
 
     # Free disk space and memory
     shutil.rmtree(render_dir, ignore_errors=True)
     gc.collect()
+
+    @after_this_request
+    def _cleanup_zip(response):
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
+        return response
 
     return send_file(
         zip_path,
@@ -490,6 +510,8 @@ def segment_slide(session_id, slide_index):
 @app.route("/browse/runs")
 def browse_runs():
     """List available pipeline runs from data/segments/."""
+    cleanup_old_sessions()
+
     if not os.path.isdir(SEGMENTS_DIR):
         return jsonify({"runs": []})
 
@@ -537,6 +559,8 @@ def browse_runs():
 @app.route("/browse/run/<run_name>")
 def browse_run(run_name):
     """List slides in a pipeline run with segment counts."""
+    if not _safe_component(run_name):
+        return jsonify({"error": "Invalid run name"}), 400
     run_path = os.path.join(SEGMENTS_DIR, run_name)
     if not os.path.isdir(run_path):
         return jsonify({"error": "Run not found"}), 404
@@ -598,6 +622,8 @@ def browse_run(run_name):
 @app.route("/browse/run/<run_name>/<slide_name>")
 def browse_slide(run_name, slide_name):
     """Return segment metadata for a slide in a pipeline run."""
+    if not _safe_component(run_name) or not _safe_component(slide_name):
+        return jsonify({"error": "Invalid path"}), 400
     run_path = os.path.join(SEGMENTS_DIR, run_name)
 
     # New format: slide is a subdirectory
@@ -626,6 +652,8 @@ def browse_slide(run_name, slide_name):
 @app.route("/browse/thumb/<run_name>/<slide_name>/<filename>")
 def browse_thumb(run_name, slide_name, filename):
     """Serve segment thumbnail from a pipeline run."""
+    if not all(_safe_component(c) for c in (run_name, slide_name, filename)):
+        return jsonify({"error": "Invalid path"}), 400
     run_path = os.path.join(SEGMENTS_DIR, run_name)
 
     # New format
@@ -642,6 +670,8 @@ def browse_thumb(run_name, slide_name, filename):
 @app.route("/browse/download/<run_name>/<slide_name>/<filename>")
 def browse_download(run_name, slide_name, filename):
     """Serve rendered segment PNG from a pipeline run."""
+    if not all(_safe_component(c) for c in (run_name, slide_name, filename)):
+        return jsonify({"error": "Invalid path"}), 400
     run_path = os.path.join(SEGMENTS_DIR, run_name)
 
     # New format
