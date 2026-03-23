@@ -508,47 +508,40 @@ async function handleImageFile(file) {
 
 // ── Multiple Image File Handling (folder upload) ─────────────────────
 async function handleImageFiles(files) {
-    showSection("processing");
-    statusText.textContent = `Uploading ${files.length} images...`;
-    statusHint.textContent = "";
-
-    const uploaded = [];
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        if (file.size > 50 * 1024 * 1024) {
-            showToast(`Skipping ${file.name}: exceeds 50 MB limit.`);
-            continue;
-        }
-        statusText.textContent = `Uploading ${i + 1} of ${files.length}...`;
-        try {
-            const formData = new FormData();
-            formData.append("file", file);
-            const res = await fetch("/upload", { method: "POST", body: formData });
-            if (!res.ok) {
-                showToast(`Failed to upload ${file.name}`);
-                continue;
-            }
-            const data = await res.json();
-            uploaded.push({
-                session_id: data.session_id,
-                filename: data.filename,
-                name: data.filename.replace(/\.[^.]+$/, ""),
-                width: data.width,
-                height: data.height,
-            });
-        } catch (err) {
-            showToast(`Error uploading ${file.name}: ${err.message}`);
-        }
-    }
-
-    if (uploaded.length === 0) {
+    if (files.length === 0) {
         showSection("upload");
-        showToast("No images were uploaded successfully.");
+        showToast("No image files found in the selected folder.");
         return;
     }
 
-    currentImageList = uploaded;
-    currentSourceName = uploaded.length === 1 ? uploaded[0].name : "images";
+    showSection("processing");
+    statusText.textContent = `Loading ${files.length} images...`;
+    statusHint.textContent = "Building preview gallery";
+
+    const previews = [];
+    for (const file of files) {
+        const localUrl = URL.createObjectURL(file);
+        let width = 0, height = 0;
+        try {
+            const imgEl = new Image();
+            await new Promise((resolve) => { imgEl.onload = resolve; imgEl.onerror = resolve; imgEl.src = localUrl; });
+            width = imgEl.naturalWidth;
+            height = imgEl.naturalHeight;
+        } catch (_) {}
+        previews.push({
+            file,
+            localUrl,
+            session_id: null,
+            filename: file.name,
+            name: file.name.replace(/\.[^.]+$/, ""),
+            width,
+            height,
+        });
+    }
+
+    currentImageList = previews;
+    currentSourceName = previews.length === 1 ? previews[0].name : "images";
+    segmentedSlides.clear();
     renderImageGallery();
 }
 
@@ -559,17 +552,43 @@ function renderImageGallery() {
         width: img.width,
         height: img.height,
         _session_id: img.session_id,
+        _localUrl: img.localUrl || null,
     }));
     renderSlidesGrid(`${currentImageList.length} Images`, slides, false);
 }
 
-function startManualAnnotateImage(idx) {
+async function startManualAnnotateImage(idx) {
     const img = currentImageList[idx];
     currentSlideIndex = idx;
-    currentSessionId = img.session_id;
     currentSourceName = img.name;
-    currentUploadData = img;
     annotateSlideIndex = null;
+
+    // Upload lazily on first click
+    if (!img.session_id) {
+        if (img.file.size > 50 * 1024 * 1024) {
+            showToast(`${img.name} exceeds the 50 MB limit.`);
+            return;
+        }
+        showSection("processing");
+        statusText.textContent = `Uploading ${img.name}...`;
+        statusHint.textContent = "";
+        try {
+            const formData = new FormData();
+            formData.append("file", img.file);
+            const res = await fetch("/upload", { method: "POST", body: formData });
+            if (!res.ok) throw new Error(await getErrorMessage(res, "Upload failed"));
+            const data = await res.json();
+            img.session_id = data.session_id;
+            img.filename = data.filename;
+        } catch (err) {
+            showSection("slides");
+            showToast("Error uploading image: " + err.message);
+            return;
+        }
+    }
+
+    currentSessionId = img.session_id;
+    currentUploadData = img;
     extractedSegments = [];
     currentPrompt = { points: [], contour: [], contourClosed: false, box: null };
     boxDragStart = null;
@@ -613,9 +632,10 @@ async function handlePdfFile(file) {
 function renderSlidesGrid(title, slides, cached) {
     showSection("slides");
     slidesTitle.textContent = title;
+    const itemLabel = currentMode === "image" ? "image" : "slide";
     slidesSubtitle.textContent = cached
-        ? `${slides.length} slides (cached)`
-        : `${slides.length} slides`;
+        ? `${slides.length} ${itemLabel}s (cached)`
+        : `${slides.length} ${itemLabel}s`;
 
     slidesGrid.innerHTML = "";
 
@@ -632,6 +652,8 @@ function renderSlidesGrid(title, slides, cached) {
         let thumbSrc;
         if (currentMode === "image" && slide._session_id) {
             thumbSrc = `/original-image/${slide._session_id}`;
+        } else if (currentMode === "image" && slide._localUrl) {
+            thumbSrc = slide._localUrl;
         } else if (currentMode === "pdf") {
             thumbSrc = `/slide-image/${currentSessionId}/${slide.filename || slide.name + ".png"}`;
         } else if (currentMode === "browse" && currentRunName) {
