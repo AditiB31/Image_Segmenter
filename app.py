@@ -87,6 +87,28 @@ def _safe_component(name):
     return True
 
 
+def _handle_annotation_error(exc, context):
+    """Uniform error handler for SAM prediction routes."""
+    if isinstance(exc, RuntimeError) and (
+        "out of memory" in str(exc).lower() or "mps" in str(exc).lower()
+    ):
+        return jsonify({"error": "Out of memory. Try a smaller image."}), 500
+    logger.exception("Segmentation error in %s", context)
+    return jsonify({"error": "Segmentation failed"}), 500
+
+
+def _load_json(path, default=None):
+    """Load a JSON file, returning default on missing or corrupt file."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return default
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to read %s: %s", path, exc)
+        return default
+
+
 def _get_image_path(session_id):
     """Return path to the original uploaded image, or None if missing."""
     session_upload_dir = os.path.join(UPLOAD_DIR, session_id)
@@ -117,10 +139,7 @@ def _resolve_slide_context(session_id, slide):
 def _load_pdf_session(session_id):
     """Load PDF session metadata, or None if not a PDF session."""
     path = os.path.join(OUTPUT_DIR, session_id, "pdf_session.json")
-    if os.path.exists(path):
-        with open(path) as f:
-            return json.load(f)
-    return None
+    return _load_json(path)
 
 
 _last_cleanup = 0
@@ -442,12 +461,8 @@ def annotate(session_id):
         segments = segmenter.predict_with_prompts(
             image_path, session_output_dir, prompts, max_dim=max_dim
         )
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower() or "mps" in str(e).lower():
-            return jsonify({"error": "Out of memory. Try a smaller image."}), 500
-        return jsonify({"error": "Segmentation failed"}), 500
-    except Exception:
-        return jsonify({"error": "Segmentation failed"}), 500
+    except Exception as e:
+        return _handle_annotation_error(e, f"annotate/{session_id}")
 
     _cleanup_memory()
 
@@ -495,12 +510,8 @@ def annotate_slide(session_id, slide_index):
         segments = segmenter.predict_with_prompts(
             slide_path, seg_output_dir, prompts, max_dim=max_dim
         )
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower() or "mps" in str(e).lower():
-            return jsonify({"error": "Out of memory. Try a smaller image."}), 500
-        return jsonify({"error": "Segmentation failed"}), 500
-    except Exception:
-        return jsonify({"error": "Segmentation failed"}), 500
+    except Exception as e:
+        return _handle_annotation_error(e, f"annotate-slide/{session_id}/{slide_index}")
 
     _cleanup_memory()
 
@@ -565,13 +576,11 @@ def upload_pdf():
     # Check cache
     cached = False
     info_path = os.path.join(images_dir, "conversion_info.json")
-    if os.path.exists(info_path):
-        with open(info_path) as f:
-            info = json.load(f)
-        if info.get("dpi") == dpi:
-            existing = sorted(glob.glob(os.path.join(images_dir, f"slide_*.{img_fmt}")))
-            if existing:
-                cached = True
+    info = _load_json(info_path, {})
+    if info.get("dpi") == dpi:
+        existing = sorted(glob.glob(os.path.join(images_dir, f"slide_*.{img_fmt}")))
+        if existing:
+            cached = True
 
     if not cached:
         os.makedirs(images_dir, exist_ok=True)
@@ -764,9 +773,8 @@ def browse_runs():
 
         # New format: has run_info.json
         info_path = os.path.join(run_path, "run_info.json")
-        if os.path.exists(info_path):
-            with open(info_path) as f:
-                info = json.load(f)
+        info = _load_json(info_path)
+        if info is not None:
             runs.append(
                 {
                     "name": name,
@@ -781,11 +789,8 @@ def browse_runs():
             # Legacy format: single-slide segment directory with masks/ inside
             if os.path.isdir(os.path.join(run_path, "masks")):
                 meta_path = os.path.join(run_path, "masks", "meta.json")
-                seg_count = 0
-                if os.path.exists(meta_path):
-                    with open(meta_path) as f:
-                        meta = json.load(f)
-                    seg_count = len(meta.get("segments", []))
+                meta = _load_json(meta_path, {})
+                seg_count = len(meta.get("segments", []))
                 runs.append(
                     {
                         "name": name,
@@ -815,20 +820,16 @@ def browse_run(run_name):
     info_path = os.path.join(run_path, "run_info.json")
     slides = []
 
-    if os.path.exists(info_path):
+    info = _load_json(info_path)
+    if info is not None:
         # New format: subdirectories per slide
-        with open(info_path) as f:
-            info = json.load(f)
         for entry in sorted(os.listdir(run_path)):
             slide_dir = os.path.join(run_path, entry)
             if not os.path.isdir(slide_dir) or not entry.startswith("slide_"):
                 continue
             meta_path = os.path.join(slide_dir, "masks", "meta.json")
-            seg_count = 0
-            if os.path.exists(meta_path):
-                with open(meta_path) as f:
-                    meta = json.load(f)
-                seg_count = len(meta.get("segments", []))
+            meta = _load_json(meta_path, {})
+            seg_count = len(meta.get("segments", []))
             has_rendered = os.path.isdir(os.path.join(slide_dir, "rendered"))
             slides.append(
                 {
@@ -852,11 +853,8 @@ def browse_run(run_name):
     else:
         # Legacy format: single slide
         meta_path = os.path.join(run_path, "masks", "meta.json")
-        seg_count = 0
-        if os.path.exists(meta_path):
-            with open(meta_path) as f:
-                meta = json.load(f)
-            seg_count = len(meta.get("segments", []))
+        meta = _load_json(meta_path, {})
+        seg_count = len(meta.get("segments", []))
         slides.append(
             {
                 "name": run_name,
@@ -881,10 +879,9 @@ def browse_slide_image(run_name, slide_name):
         return jsonify({"error": "Invalid path"}), 400
     run_path = os.path.join(SEGMENTS_DIR, run_name)
     info_path = os.path.join(run_path, "run_info.json")
-    if not os.path.exists(info_path):
+    info = _load_json(info_path)
+    if info is None:
         return jsonify({"error": "Run not found"}), 404
-    with open(info_path) as f:
-        info = json.load(f)
     images_dir = info.get("images_dir", "")
     if not images_dir or not os.path.isdir(images_dir):
         return jsonify({"error": "Images not found"}), 404
@@ -912,11 +909,9 @@ def browse_slide(run_name, slide_name):
         slide_dir = run_path
         meta_path = os.path.join(run_path, "masks", "meta.json")
 
-    if not os.path.exists(meta_path):
+    meta = _load_json(meta_path)
+    if meta is None:
         return jsonify({"error": "Segment data not found"}), 404
-
-    with open(meta_path) as f:
-        meta = json.load(f)
 
     return jsonify(
         {

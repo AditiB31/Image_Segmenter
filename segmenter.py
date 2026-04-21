@@ -292,6 +292,7 @@ class ImageSegmenter:
         inv_scale_sq = 1.0 / (scale * scale) if scale != 1.0 else 1.0
         max_aspect = cfg.get("max_aspect_ratio", 0)
         min_fill = cfg.get("min_fill_ratio", 0)
+        text_fill_area_thresh = cfg.get("text_fill_area_thresh", 20000)
         masks = []
         for m in all_masks:
             if m["area"] * inv_scale_sq < min_area:
@@ -314,7 +315,7 @@ class ImageSegmenter:
                 continue
             # Small segments with very high fill are almost certainly text
             # (e.g. "CME", "OK"). Large solid objects are fine.
-            if m["area"] < 20000 and fill > 0.90:
+            if m["area"] < text_fill_area_thresh and fill > 0.90:
                 del m["segmentation"]
                 continue
             masks.append(m)
@@ -327,7 +328,7 @@ class ImageSegmenter:
         #    tend to have colour (saturation > 0).
         min_color_std = cfg.get("min_color_std", 0)
         min_sat = cfg.get("min_saturation", 0)
-        small_seg_area = 15000  # only apply saturation check to small segments
+        small_seg_area = cfg.get("small_seg_area", 15000)  # only apply saturation check to small segments
         if min_color_std > 0 or min_sat > 0:
             filtered = []
             for m in masks:
@@ -684,7 +685,7 @@ class ImageSegmenter:
         ks = cfg["morph_kernel_size"]
         morph_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
         mask_area = np.count_nonzero(mask_inf)
-        if mask_area > 800:  # only clean masks large enough to survive erosion
+        if mask_area > cfg.get("morph_min_area", 800):  # only clean masks large enough to survive erosion
             # Close first to fill small holes, then open to remove noise
             mask_inf = cv2.morphologyEx(mask_inf, cv2.MORPH_CLOSE, morph_k)
             mask_inf = cv2.morphologyEx(mask_inf, cv2.MORPH_OPEN, morph_k)

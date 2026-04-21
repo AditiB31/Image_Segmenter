@@ -97,8 +97,11 @@ def _get_cached_images(images_dir, dpi, img_fmt, page_indices=None):
     info_path = os.path.join(images_dir, "conversion_info.json")
 
     if os.path.exists(info_path):
-        with open(info_path) as f:
-            info = json.load(f)
+        try:
+            with open(info_path) as f:
+                info = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            info = {}
         if info.get("dpi") == dpi:
             existing = sorted(glob.glob(os.path.join(images_dir, f"slide_*.{img_fmt}")))
             if existing:

@@ -86,6 +86,23 @@ iou_dedup_thresh: 0.8
 # Set to 0 to disable.
 containment_thresh: 0.7
 
+# Maximum area (at inference resolution) for the "small high-fill = text" check.
+# Segments with area below this AND fill ratio above 0.90 are rejected as text
+# (e.g. "OK", "CME" labels on slides). Inference resolution = original / scale.
+# At max_dim=2048 with a 4096px source, inference res is 2048px, so 20000 here
+# ≈ 80000 original-resolution pixels. Range: 5000–50000. Set high to be lenient.
+text_fill_area_thresh: 20000
+
+# Maximum area (at original resolution) for the saturation-based text filter.
+# Only segments smaller than this are checked for low HSV saturation.
+# At original resolution. Range: 5000–50000.
+small_seg_area: 15000
+
+# Minimum mask area (at inference resolution) for morphological cleanup.
+# Masks smaller than this skip MORPH_CLOSE/OPEN to avoid destroying thin shapes.
+# At inference resolution. Range: 200–2000.
+morph_min_area: 800
+
 # ─── Thumbnail Settings ────────────────────────────────────────────────────
 
 # Maximum dimension (px) for gallery thumbnail previews.
