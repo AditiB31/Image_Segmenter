@@ -48,6 +48,16 @@ python setup_model.py
 
 The setup script installs `sam2` from GitHub (CPU-only, no CUDA build) and downloads `sam2.1_hiera_base_plus.pt` to `checkpoints/`.
 
+## Running Tests
+
+```bash
+# Install dev dependencies (pytest)
+pip install -r requirements-dev.txt
+
+# Run the test suite
+python -m pytest tests/
+```
+
 ## Running the Web App
 
 ```bash

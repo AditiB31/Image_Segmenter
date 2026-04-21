@@ -7,8 +7,12 @@ Loads the model once and provides:
 
 import gc
 import json
+import logging
 import os
 import warnings
+from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
@@ -39,9 +43,11 @@ MODEL_CFG = "configs/sam2.1/sam2.1_hiera_b+.yaml"
 
 
 class ImageSegmenter:
+    """SAM 2.1-backed image segmenter for automatic and prompt-based mask generation."""
+
     def __init__(self, checkpoint_path=CHECKPOINT_PATH, model_cfg=MODEL_CFG):
         self.device = self._get_device()
-        print(f"Loading SAM 2.1 on device: {self.device}")
+        logger.info("Loading SAM 2.1 on device: %s", self.device)
 
         sam2_model = build_sam2(
             model_cfg,
@@ -57,7 +63,7 @@ class ImageSegmenter:
             min_mask_region_area=cfg["min_mask_region_area"],
         )
         self.predictor = SAM2ImagePredictor(sam2_model)
-        print("SAM 2.1 model loaded successfully.")
+        logger.info("SAM 2.1 model loaded successfully.")
 
     def _get_device(self):
         """Try MPS (Apple Silicon GPU), fall back to CPU."""
@@ -67,7 +73,7 @@ class ImageSegmenter:
                 del t
                 return torch.device("mps")
             except Exception:
-                print("MPS available but not functional, falling back to CPU.")
+                logger.warning("MPS available but not functional, falling back to CPU.")
         return torch.device("cpu")
 
     def _deduplicate_masks(self, masks, iou_thresh=None, containment_thresh=None):
@@ -159,7 +165,9 @@ class ImageSegmenter:
                 scale = max_dim / max(orig_w, orig_h)
                 new_w = int(orig_w * scale)
                 new_h = int(orig_h * scale)
-                inference_image = np.array(original.resize((new_w, new_h), Image.LANCZOS))
+                inference_image = np.array(
+                    original.resize((new_w, new_h), Image.LANCZOS)
+                )
             else:
                 inference_image = np.array(original)
         return inference_image, orig_w, orig_h, scale
@@ -232,7 +240,13 @@ class ImageSegmenter:
             json.dump(meta, f)
         os.replace(tmp_path, meta_path)
 
-    def segment(self, image_path, output_dir, min_area=None, max_dim=None):
+    def segment(
+        self,
+        image_path: str,
+        output_dir: str,
+        min_area: Optional[int] = None,
+        max_dim: Optional[int] = None,
+    ) -> list[dict]:
         """
         Detect all masks and save compact data for deferred rendering.
 
@@ -260,7 +274,9 @@ class ImageSegmenter:
         os.makedirs(masks_dir, exist_ok=True)
         os.makedirs(thumbs_dir, exist_ok=True)
 
-        inference_image, orig_w, orig_h, scale = self._load_and_resize(image_path, max_dim)
+        inference_image, orig_w, orig_h, scale = self._load_and_resize(
+            image_path, max_dim
+        )
         thumb_source = inference_image
 
         all_masks = self._run_with_autocast(
@@ -318,8 +334,8 @@ class ImageSegmenter:
                 seg = m["segmentation"]
                 bbox = m["bbox"]
                 x, y, w, h = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-                crop = inference_image[y:y+h, x:x+w]
-                mask_crop = seg[y:y+h, x:x+w]
+                crop = inference_image[y : y + h, x : x + w]
+                mask_crop = seg[y : y + h, x : x + w]
                 pixels = crop[mask_crop]
                 if len(pixels) > 0:
                     mean_val = float(np.mean(pixels))
@@ -381,7 +397,9 @@ class ImageSegmenter:
             )
 
             thumb_rgb = thumb_source[inf_y:inf_b, inf_x:inf_r]
-            thumb_name = self._make_thumbnail(thumb_rgb, mask_crop, thumbs_dir, idx, thumb_max)
+            thumb_name = self._make_thumbnail(
+                thumb_rgb, mask_crop, thumbs_dir, idx, thumb_max
+            )
 
             del mask_data["segmentation"]
             del mask_crop
@@ -402,13 +420,16 @@ class ImageSegmenter:
         del thumb_source, inference_image
         gc.collect()
 
-        self._save_meta(masks_dir, {
-            "scale": scale,
-            "orig_w": orig_w,
-            "orig_h": orig_h,
-            "settings": {"min_area": min_area, "max_dim": max_dim},
-            "segments": results,
-        })
+        self._save_meta(
+            masks_dir,
+            {
+                "scale": scale,
+                "orig_w": orig_w,
+                "orig_h": orig_h,
+                "settings": {"min_area": min_area, "max_dim": max_dim},
+                "segments": results,
+            },
+        )
 
         if self.device.type == "mps":
             torch.mps.empty_cache()
@@ -416,7 +437,13 @@ class ImageSegmenter:
 
         return results
 
-    def predict_with_prompts(self, image_path, output_dir, prompts, max_dim=None):
+    def predict_with_prompts(
+        self,
+        image_path: str,
+        output_dir: str,
+        prompts: list[dict],
+        max_dim: Optional[int] = None,
+    ) -> list[dict]:
         """
         Segment objects using point/box/contour prompts via SAM2ImagePredictor.
 
@@ -453,7 +480,9 @@ class ImageSegmenter:
             existing_segments = []
             start_idx = 0
 
-        inference_image, orig_w, orig_h, scale = self._load_and_resize(image_path, max_dim)
+        inference_image, orig_w, orig_h, scale = self._load_and_resize(
+            image_path, max_dim
+        )
 
         # Set image on predictor (computes embeddings once)
         self._run_with_autocast(lambda: self.predictor.set_image(inference_image))
@@ -478,8 +507,12 @@ class ImageSegmenter:
                 xs = [p[0] for p in contour_pts]
                 ys = [p[1] for p in contour_pts]
                 predict_kwargs["box"] = np.array(
-                    [min(xs) * scale, min(ys) * scale,
-                     max(xs) * scale, max(ys) * scale],
+                    [
+                        min(xs) * scale,
+                        min(ys) * scale,
+                        max(xs) * scale,
+                        max(ys) * scale,
+                    ],
                     dtype=np.float32,
                 )
                 # Sample up to 10 points along the contour
@@ -502,9 +535,7 @@ class ImageSegmenter:
                 predict_kwargs["point_coords"] = np.array(
                     point_coords, dtype=np.float32
                 )
-                predict_kwargs["point_labels"] = np.array(
-                    point_labels, dtype=np.int32
-                )
+                predict_kwargs["point_labels"] = np.array(point_labels, dtype=np.int32)
 
             if len(predict_kwargs) <= 1:
                 continue  # no valid prompts
@@ -537,7 +568,7 @@ class ImageSegmenter:
                 continue
             fx, fy, fw, fh = full_bbox
 
-            mask_crop = mask[inf_y:inf_y + inf_h, inf_x:inf_x + inf_w]
+            mask_crop = mask[inf_y : inf_y + inf_h, inf_x : inf_x + inf_w]
             inv_scale_sq = 1.0 / (scale * scale) if scale != 1.0 else 1.0
             actual_area = int(np.count_nonzero(mask_crop) * inv_scale_sq)
 
@@ -547,21 +578,25 @@ class ImageSegmenter:
                 shape=np.array(mask_crop.shape, dtype=np.int32),
             )
 
-            thumb_rgb = inference_image[inf_y:inf_y + inf_h, inf_x:inf_x + inf_w]
-            thumb_name = self._make_thumbnail(thumb_rgb, mask_crop, thumbs_dir, idx, thumb_max)
+            thumb_rgb = inference_image[inf_y : inf_y + inf_h, inf_x : inf_x + inf_w]
+            thumb_name = self._make_thumbnail(
+                thumb_rgb, mask_crop, thumbs_dir, idx, thumb_max
+            )
 
             del mask_crop
 
-            results.append({
-                "index": idx,
-                "filename": thumb_name,
-                "area": actual_area,
-                "width": fw,
-                "height": fh,
-                "predicted_iou": round(float(scores[best]), 3),
-                "bbox_orig": [fx, fy, fw, fh],
-                "bbox_inf": [inf_x, inf_y, inf_w, inf_h],
-            })
+            results.append(
+                {
+                    "index": idx,
+                    "filename": thumb_name,
+                    "area": actual_area,
+                    "width": fw,
+                    "height": fh,
+                    "predicted_iou": round(float(scores[best]), 3),
+                    "bbox_orig": [fx, fy, fw, fh],
+                    "bbox_inf": [inf_x, inf_y, inf_w, inf_h],
+                }
+            )
 
         # Free predictor state and GPU memory
         if hasattr(self.predictor, "reset_predictor"):
@@ -574,28 +609,31 @@ class ImageSegmenter:
 
         # Update meta.json
         all_segments = existing_segments + results
-        self._save_meta(masks_dir, {
-            "scale": scale,
-            "orig_w": orig_w,
-            "orig_h": orig_h,
-            "settings": {"max_dim": max_dim, "mode": "manual"},
-            "segments": all_segments,
-        })
+        self._save_meta(
+            masks_dir,
+            {
+                "scale": scale,
+                "orig_w": orig_w,
+                "orig_h": orig_h,
+                "settings": {"max_dim": max_dim, "mode": "manual"},
+                "segments": all_segments,
+            },
+        )
 
         return results
 
     @staticmethod
     def render_segment(
-        image_path,
-        output_dir,
-        index,
-        meta=None,
-        upscale=None,
-        out_path=None,
-        image_array=None,
-        tight_crop=None,
-        tight_crop_padding=None,
-    ):
+        image_path: Optional[str],
+        output_dir: str,
+        index: int,
+        meta: Optional[dict] = None,
+        upscale: Optional[int] = None,
+        out_path: Optional[str] = None,
+        image_array: Optional[np.ndarray] = None,
+        tight_crop: Optional[bool] = None,
+        tight_crop_padding: Optional[int] = None,
+    ) -> Optional[str]:
         """
         Render a single full-resolution RGBA PNG on demand.
 
@@ -710,14 +748,14 @@ class ImageSegmenter:
         # sharpening to tighten the edge and prevent grey fringe/halo artifacts
         # that LANCZOS creates on binary mask boundaries.
         if scale != 1.0:
-            full_mask_np = cv2.resize(
-                mask_inf, (fw, fh), interpolation=cv2.INTER_CUBIC
-            )
+            full_mask_np = cv2.resize(mask_inf, (fw, fh), interpolation=cv2.INTER_CUBIC)
             # Sigmoid sharpening: push grey fringe pixels toward 0 or 255
             # to create a crisp but anti-aliased edge
             mid = 127.5
             sharpness = cfg.get("mask_upscale_sharpness", 0.08)
-            mask_float = 1.0 / (1.0 + np.exp(-(full_mask_np.astype(np.float32) - mid) * sharpness))
+            mask_float = 1.0 / (
+                1.0 + np.exp(-(full_mask_np.astype(np.float32) - mid) * sharpness)
+            )
             full_mask_np = (mask_float * 255).astype(np.uint8)
         else:
             full_mask_np = mask_inf

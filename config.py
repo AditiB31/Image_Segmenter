@@ -5,7 +5,10 @@ Reads config.yaml from the project root and exposes a module-level `cfg` dict.
 Every key has a built-in default so the app works even without the YAML file.
 """
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_PATH = os.path.join(_BASE_DIR, "config.yaml")
@@ -64,7 +67,7 @@ _DEFAULTS = {
 }
 
 
-def load_config(path=_CONFIG_PATH):
+def load_config(path: str = _CONFIG_PATH) -> dict:
     """Load configuration from YAML, falling back to built-in defaults."""
     config = dict(_DEFAULTS)
     if os.path.exists(path):
@@ -77,7 +80,7 @@ def load_config(path=_CONFIG_PATH):
         except ImportError:
             pass  # pyyaml not installed — use defaults silently
         except Exception as exc:
-            print(f"Warning: failed to parse {path}: {exc} — using defaults")
+            logger.warning("Failed to parse %s: %s — using defaults", path, exc)
     return config
 
 

@@ -8,6 +8,7 @@ import yaml
 
 # Import the config module's internals
 import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import load_config, _DEFAULTS
@@ -19,13 +20,28 @@ class TestConfigDefaults:
     def test_defaults_exist(self):
         """All expected keys are present in defaults."""
         required_keys = [
-            "min_area", "max_dim", "max_segments", "upscale",
-            "points_per_side", "pred_iou_thresh", "stability_score_thresh",
-            "feather_min_px", "feather_max_px", "feather_factor",
-            "morph_kernel_size", "contour_sigma_min", "contour_sigma_max",
-            "feather_blur_kernel", "feather_blur_sigma",
-            "mask_upscale_sharpness", "tight_crop", "tight_crop_padding",
-            "pdf_dpi", "render_workers", "max_upload_mb", "session_ttl",
+            "min_area",
+            "max_dim",
+            "max_segments",
+            "upscale",
+            "points_per_side",
+            "pred_iou_thresh",
+            "stability_score_thresh",
+            "feather_min_px",
+            "feather_max_px",
+            "feather_factor",
+            "morph_kernel_size",
+            "contour_sigma_min",
+            "contour_sigma_max",
+            "feather_blur_kernel",
+            "feather_blur_sigma",
+            "mask_upscale_sharpness",
+            "tight_crop",
+            "tight_crop_padding",
+            "pdf_dpi",
+            "render_workers",
+            "max_upload_mb",
+            "session_ttl",
         ]
         for key in required_keys:
             assert key in _DEFAULTS, f"Missing default key: {key}"
@@ -73,9 +89,7 @@ class TestConfigLoading:
 
     def test_load_overrides_defaults(self):
         """YAML values should override defaults."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump({"min_area": 999, "max_dim": 1024}, f)
             f.flush()
             try:
@@ -89,9 +103,7 @@ class TestConfigLoading:
 
     def test_load_empty_yaml(self):
         """Empty YAML file should return defaults."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write("")
             f.flush()
             try:
@@ -103,8 +115,7 @@ class TestConfigLoading:
     def test_load_actual_config(self):
         """Loading the project's config.yaml should work."""
         config_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "config.yaml"
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml"
         )
         if os.path.exists(config_path):
             cfg = load_config(config_path)
@@ -121,8 +132,7 @@ class TestConfigConsistency:
     def test_yaml_matches_python_defaults(self):
         """Values in config.yaml should match updated Python defaults."""
         config_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "config.yaml"
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml"
         )
         if not os.path.exists(config_path):
             pytest.skip("config.yaml not found")
@@ -132,13 +142,16 @@ class TestConfigConsistency:
 
         # Check edge-related values match between YAML and Python defaults
         edge_keys = [
-            "feather_min_px", "feather_max_px", "feather_factor",
-            "contour_sigma_min", "contour_sigma_divisor",
-            "feather_blur_kernel", "feather_blur_sigma",
+            "feather_min_px",
+            "feather_max_px",
+            "feather_factor",
+            "contour_sigma_min",
+            "contour_sigma_divisor",
+            "feather_blur_kernel",
+            "feather_blur_sigma",
             "mask_upscale_sharpness",
         ]
         for key in edge_keys:
             assert yaml_cfg[key] == _DEFAULTS[key], (
-                f"Mismatch for {key}: YAML={yaml_cfg[key]}, "
-                f"Python={_DEFAULTS[key]}"
+                f"Mismatch for {key}: YAML={yaml_cfg[key]}, Python={_DEFAULTS[key]}"
             )

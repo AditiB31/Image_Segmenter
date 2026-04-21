@@ -31,7 +31,9 @@ from datetime import datetime
 from config import cfg
 
 
-def pdf_to_images(pdf_path, output_dir, dpi=200, fmt="png", page_indices=None):
+def pdf_to_images(
+    pdf_path: str, output_dir: str, dpi: int = 200, fmt: str = "png", page_indices=None
+) -> list[str]:
     """Convert PDF pages to image files.
 
     Args:
@@ -62,7 +64,7 @@ def pdf_to_images(pdf_path, output_dir, dpi=200, fmt="png", page_indices=None):
     return results
 
 
-def get_pdf_page_count(pdf_path):
+def get_pdf_page_count(pdf_path: str) -> int:
     """Return the number of pages in a PDF without rasterizing."""
     import fitz
 
@@ -70,7 +72,7 @@ def get_pdf_page_count(pdf_path):
         return len(doc)
 
 
-def parse_slide_range(spec, total):
+def parse_slide_range(spec: str, total: int) -> list[int]:
     """Parse slide specification like '1-5' or '3,7,10' into 0-based indices."""
     indices = set()
     for part in spec.split(","):
@@ -98,9 +100,7 @@ def _get_cached_images(images_dir, dpi, img_fmt, page_indices=None):
         with open(info_path) as f:
             info = json.load(f)
         if info.get("dpi") == dpi:
-            existing = sorted(glob.glob(
-                os.path.join(images_dir, f"slide_*.{img_fmt}")
-            ))
+            existing = sorted(glob.glob(os.path.join(images_dir, f"slide_*.{img_fmt}")))
             if existing:
                 if page_indices is not None:
                     # Filter to only requested slides
@@ -122,6 +122,7 @@ def _get_cached_images(images_dir, dpi, img_fmt, page_indices=None):
 
 
 def main():
+    """CLI entry point: parse arguments and run the PDF segmentation pipeline."""
     parser = argparse.ArgumentParser(
         description="PDF -> Slide Images -> Segments pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -214,7 +215,9 @@ Examples:
     if args.slides:
         page_indices = parse_slide_range(args.slides, total_pages)
         if not page_indices:
-            print(f"Error: No valid slides in range '{args.slides}' (PDF has {total_pages} pages)")
+            print(
+                f"Error: No valid slides in range '{args.slides}' (PDF has {total_pages} pages)"
+            )
             sys.exit(1)
 
     # Check cache
@@ -234,7 +237,11 @@ Examples:
 
         t0 = time.time()
         slide_paths = pdf_to_images(
-            pdf_path, images_dir, dpi=dpi, fmt=img_fmt, page_indices=page_indices,
+            pdf_path,
+            images_dir,
+            dpi=dpi,
+            fmt=img_fmt,
+            page_indices=page_indices,
         )
         print(f"  {len(slide_paths)} slides saved to {images_dir}")
         print(f"  Conversion time: {time.time() - t0:.1f}s")
@@ -364,7 +371,9 @@ Examples:
         gc.collect()
         render_time = time.time() - t2
         failed = len(segments) - rendered_count
-        status = f"  [{slide_name}] Rendered {rendered_count} segments ({render_time:.1f}s)"
+        status = (
+            f"  [{slide_name}] Rendered {rendered_count} segments ({render_time:.1f}s)"
+        )
         if failed:
             status += f" ({failed} failed)"
         print(status)

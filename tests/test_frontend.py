@@ -1,7 +1,6 @@
 """Tests for frontend JavaScript structure and HTML template."""
 
 import os
-import re
 
 import pytest
 

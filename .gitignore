@@ -9,3 +9,7 @@ __pycache__/
 src/
 data/
 .DS_Store
+.claude/AUDIT.md
+.claude/SMOKE_TEST.md
+.pytest_cache/
+htmlcov/

@@ -7,6 +7,7 @@ Upload an image → SAM 2.1 segments all objects → download as transparent PNG
 import gc
 import glob
 import json
+import logging
 import os
 import shutil
 import time
@@ -14,6 +15,8 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -39,6 +42,7 @@ app.config["MAX_CONTENT_LENGTH"] = cfg["max_upload_mb"] * 1024 * 1024
 _HAS_MPS = False
 try:
     import torch
+
     _HAS_MPS = torch.backends.mps.is_available()
 except ImportError:
     pass
@@ -48,8 +52,10 @@ def _cleanup_memory():
     """Free GPU and Python memory. Call after every major operation."""
     if _HAS_MPS:
         import torch
+
         torch.mps.empty_cache()
     gc.collect()
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
@@ -65,11 +71,12 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Load model once at startup
-print("Initializing SAM 2.1 model...")
+logger.info("Initializing SAM 2.1 model...")
 segmenter = ImageSegmenter()
 
 
 def allowed_file(filename):
+    """Return True if the filename has an allowed image extension."""
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
@@ -148,11 +155,13 @@ def cleanup_old_sessions():
 
 @app.route("/")
 def index():
+    """Serve the main single-page application."""
     return render_template("index.html")
 
 
 @app.route("/upload", methods=["POST"])
 def upload():
+    """Accept a single image upload, create a session, and return session metadata."""
     cleanup_old_sessions()
 
     if "file" not in request.files:
@@ -190,6 +199,7 @@ def upload():
 
 @app.route("/segment/<session_id>", methods=["POST"])
 def segment(session_id):
+    """Run automatic segmentation on the uploaded image for the given session."""
     if not _safe_component(session_id):
         return jsonify({"error": "Invalid session"}), 400
     cleanup_old_sessions()
@@ -434,9 +444,7 @@ def annotate(session_id):
         )
     except RuntimeError as e:
         if "out of memory" in str(e).lower() or "mps" in str(e).lower():
-            return jsonify(
-                {"error": "Out of memory. Try a smaller image."}
-            ), 500
+            return jsonify({"error": "Out of memory. Try a smaller image."}), 500
         return jsonify({"error": "Segmentation failed"}), 500
     except Exception:
         return jsonify({"error": "Segmentation failed"}), 500
@@ -489,9 +497,7 @@ def annotate_slide(session_id, slide_index):
         )
     except RuntimeError as e:
         if "out of memory" in str(e).lower() or "mps" in str(e).lower():
-            return jsonify(
-                {"error": "Out of memory. Try a smaller image."}
-            ), 500
+            return jsonify({"error": "Out of memory. Try a smaller image."}), 500
         return jsonify({"error": "Segmentation failed"}), 500
     except Exception:
         return jsonify({"error": "Segmentation failed"}), 500
@@ -546,7 +552,11 @@ def upload_pdf():
         total_pages = get_pdf_page_count(pdf_path)
     except Exception:
         shutil.rmtree(session_upload_dir, ignore_errors=True)
-        return jsonify({"error": "Could not read PDF. The file may be corrupted or password-protected."}), 400
+        return jsonify(
+            {
+                "error": "Could not read PDF. The file may be corrupted or password-protected."
+            }
+        ), 400
 
     if total_pages == 0:
         shutil.rmtree(session_upload_dir, ignore_errors=True)
@@ -559,9 +569,7 @@ def upload_pdf():
         with open(info_path) as f:
             info = json.load(f)
         if info.get("dpi") == dpi:
-            existing = sorted(glob.glob(
-                os.path.join(images_dir, f"slide_*.{img_fmt}")
-            ))
+            existing = sorted(glob.glob(os.path.join(images_dir, f"slide_*.{img_fmt}")))
             if existing:
                 cached = True
 
@@ -621,13 +629,15 @@ def upload_pdf():
 
     _cleanup_memory()
 
-    return jsonify({
-        "session_id": session_id,
-        "pdf_name": pdf_name,
-        "total_pages": total_pages,
-        "slides": slides,
-        "cached": cached,
-    })
+    return jsonify(
+        {
+            "session_id": session_id,
+            "pdf_name": pdf_name,
+            "total_pages": total_pages,
+            "slides": slides,
+            "cached": cached,
+        }
+    )
 
 
 @app.route("/slide-image/<session_id>/<filename>")
@@ -690,16 +700,20 @@ def segment_slide(session_id, slide_index):
             with open(meta_path) as f:
                 meta = json.load(f)
             cached_settings = meta.get("settings", {})
-            if (cached_settings.get("min_area") == min_area
-                    and cached_settings.get("max_dim") == max_dim):
-                return jsonify({
-                    "session_id": session_id,
-                    "slide_name": slide_name,
-                    "slide_index": slide_index,
-                    "segment_count": len(meta["segments"]),
-                    "segments": meta["segments"],
-                    "cached": True,
-                })
+            if (
+                cached_settings.get("min_area") == min_area
+                and cached_settings.get("max_dim") == max_dim
+            ):
+                return jsonify(
+                    {
+                        "session_id": session_id,
+                        "slide_name": slide_name,
+                        "slide_index": slide_index,
+                        "segment_count": len(meta["segments"]),
+                        "segments": meta["segments"],
+                        "cached": True,
+                    }
+                )
         except (json.JSONDecodeError, KeyError):
             pass  # corrupted cache, re-segment
 
@@ -709,22 +723,26 @@ def segment_slide(session_id, slide_index):
         )
     except RuntimeError as e:
         if "out of memory" in str(e).lower() or "mps" in str(e).lower():
-            return jsonify({
-                "error": "Out of memory. Try a smaller max_dim.",
-            }), 500
+            return jsonify(
+                {
+                    "error": "Out of memory. Try a smaller max_dim.",
+                }
+            ), 500
         raise
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
     _cleanup_memory()
 
-    return jsonify({
-        "session_id": session_id,
-        "slide_name": slide_name,
-        "slide_index": slide_index,
-        "segment_count": len(segments),
-        "segments": segments,
-    })
+    return jsonify(
+        {
+            "session_id": session_id,
+            "slide_name": slide_name,
+            "slide_index": slide_index,
+            "segment_count": len(segments),
+            "segments": segments,
+        }
+    )
 
 
 # ── Browse Existing Runs ───────────────────────────────────────────────
@@ -749,14 +767,16 @@ def browse_runs():
         if os.path.exists(info_path):
             with open(info_path) as f:
                 info = json.load(f)
-            runs.append({
-                "name": name,
-                "pdf_name": info.get("pdf", name),
-                "timestamp": info.get("timestamp", ""),
-                "total_segments": info.get("total_segments", 0),
-                "slide_count": len(info.get("slides", [])),
-                "settings": info.get("settings", {}),
-            })
+            runs.append(
+                {
+                    "name": name,
+                    "pdf_name": info.get("pdf", name),
+                    "timestamp": info.get("timestamp", ""),
+                    "total_segments": info.get("total_segments", 0),
+                    "slide_count": len(info.get("slides", [])),
+                    "settings": info.get("settings", {}),
+                }
+            )
         else:
             # Legacy format: single-slide segment directory with masks/ inside
             if os.path.isdir(os.path.join(run_path, "masks")):
@@ -766,15 +786,19 @@ def browse_runs():
                     with open(meta_path) as f:
                         meta = json.load(f)
                     seg_count = len(meta.get("segments", []))
-                runs.append({
-                    "name": name,
-                    "pdf_name": name.rsplit("_slide_", 1)[0] if "_slide_" in name else name,
-                    "timestamp": "",
-                    "total_segments": seg_count,
-                    "slide_count": 1,
-                    "settings": {},
-                    "legacy": True,
-                })
+                runs.append(
+                    {
+                        "name": name,
+                        "pdf_name": name.rsplit("_slide_", 1)[0]
+                        if "_slide_" in name
+                        else name,
+                        "timestamp": "",
+                        "total_segments": seg_count,
+                        "slide_count": 1,
+                        "settings": {},
+                        "legacy": True,
+                    }
+                )
 
     return jsonify({"runs": runs})
 
@@ -806,21 +830,25 @@ def browse_run(run_name):
                     meta = json.load(f)
                 seg_count = len(meta.get("segments", []))
             has_rendered = os.path.isdir(os.path.join(slide_dir, "rendered"))
-            slides.append({
-                "name": entry,
-                "segment_count": seg_count,
-                "has_rendered": has_rendered,
-            })
+            slides.append(
+                {
+                    "name": entry,
+                    "segment_count": seg_count,
+                    "has_rendered": has_rendered,
+                }
+            )
         # Try to find slide image dimensions from cached images
         images_dir = info.get("images_dir", "")
-        return jsonify({
-            "run_name": run_name,
-            "pdf_name": info.get("pdf", run_name),
-            "timestamp": info.get("timestamp", ""),
-            "settings": info.get("settings", {}),
-            "slides": slides,
-            "images_dir": images_dir,
-        })
+        return jsonify(
+            {
+                "run_name": run_name,
+                "pdf_name": info.get("pdf", run_name),
+                "timestamp": info.get("timestamp", ""),
+                "settings": info.get("settings", {}),
+                "slides": slides,
+                "images_dir": images_dir,
+            }
+        )
     else:
         # Legacy format: single slide
         meta_path = os.path.join(run_path, "masks", "meta.json")
@@ -829,17 +857,21 @@ def browse_run(run_name):
             with open(meta_path) as f:
                 meta = json.load(f)
             seg_count = len(meta.get("segments", []))
-        slides.append({
-            "name": run_name,
-            "segment_count": seg_count,
-            "has_rendered": os.path.isdir(os.path.join(run_path, "rendered")),
-            "legacy": True,
-        })
-        return jsonify({
-            "run_name": run_name,
-            "pdf_name": run_name,
-            "slides": slides,
-        })
+        slides.append(
+            {
+                "name": run_name,
+                "segment_count": seg_count,
+                "has_rendered": os.path.isdir(os.path.join(run_path, "rendered")),
+                "legacy": True,
+            }
+        )
+        return jsonify(
+            {
+                "run_name": run_name,
+                "pdf_name": run_name,
+                "slides": slides,
+            }
+        )
 
 
 @app.route("/browse/slide-image/<run_name>/<slide_name>")
@@ -886,12 +918,14 @@ def browse_slide(run_name, slide_name):
     with open(meta_path) as f:
         meta = json.load(f)
 
-    return jsonify({
-        "run_name": run_name,
-        "slide_name": slide_name,
-        "segments": meta.get("segments", []),
-        "has_rendered": os.path.isdir(os.path.join(slide_dir, "rendered")),
-    })
+    return jsonify(
+        {
+            "run_name": run_name,
+            "slide_name": slide_name,
+            "segments": meta.get("segments", []),
+            "has_rendered": os.path.isdir(os.path.join(slide_dir, "rendered")),
+        }
+    )
 
 
 @app.route("/browse/thumb/<run_name>/<slide_name>/<filename>")
@@ -969,7 +1003,7 @@ def browse_download_all(run_name, slide_name):
     if not files:
         return jsonify({"error": "No segments found"}), 404
 
-    zip_path = os.path.join(run_path, slide_name, f"browse_download.zip")
+    zip_path = os.path.join(run_path, slide_name, "browse_download.zip")
     os.makedirs(os.path.dirname(zip_path), exist_ok=True)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for path, fname in files:

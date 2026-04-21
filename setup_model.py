@@ -55,6 +55,7 @@ def download_checkpoint():
     print(f"[...] Downloading {CHECKPOINT_NAME}...")
 
     def progress_hook(block_num, block_size, total_size):
+        """Report download progress to stdout during checkpoint fetch."""
         downloaded = block_num * block_size
         if total_size > 0:
             pct = min(100, downloaded * 100 / total_size)
