@@ -328,7 +328,9 @@ class ImageSegmenter:
         #    tend to have colour (saturation > 0).
         min_color_std = cfg.get("min_color_std", 0)
         min_sat = cfg.get("min_saturation", 0)
-        small_seg_area = cfg.get("small_seg_area", 15000)  # only apply saturation check to small segments
+        small_seg_area = cfg.get(
+            "small_seg_area", 15000
+        )  # only apply saturation check to small segments
         if min_color_std > 0 or min_sat > 0:
             filtered = []
             for m in masks:
@@ -685,7 +687,9 @@ class ImageSegmenter:
         ks = cfg["morph_kernel_size"]
         morph_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
         mask_area = np.count_nonzero(mask_inf)
-        if mask_area > cfg.get("morph_min_area", 800):  # only clean masks large enough to survive erosion
+        if mask_area > cfg.get(
+            "morph_min_area", 800
+        ):  # only clean masks large enough to survive erosion
             # Close first to fill small holes, then open to remove noise
             mask_inf = cv2.morphologyEx(mask_inf, cv2.MORPH_CLOSE, morph_k)
             mask_inf = cv2.morphologyEx(mask_inf, cv2.MORPH_OPEN, morph_k)
