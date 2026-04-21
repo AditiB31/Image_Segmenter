@@ -27,12 +27,17 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from typing import Optional
 
 from config import cfg
 
 
 def pdf_to_images(
-    pdf_path: str, output_dir: str, dpi: int = 200, fmt: str = "png", page_indices=None
+    pdf_path: str,
+    output_dir: str,
+    dpi: int = 200,
+    fmt: str = "png",
+    page_indices: Optional[list[int]] = None,
 ) -> list[str]:
     """Convert PDF pages to image files.
 

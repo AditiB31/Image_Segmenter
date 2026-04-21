@@ -75,7 +75,7 @@ logger.info("Initializing SAM 2.1 model...")
 segmenter = ImageSegmenter()
 
 
-def allowed_file(filename):
+def allowed_file(filename: str) -> bool:
     """Return True if the filename has an allowed image extension."""
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -146,7 +146,7 @@ _last_cleanup = 0
 _CLEANUP_INTERVAL = 60  # seconds between cleanup runs
 
 
-def cleanup_old_sessions():
+def cleanup_old_sessions() -> None:
     """Remove session directories older than TTL. Throttled to run at most once per minute."""
     global _last_cleanup
     now = time.time()
